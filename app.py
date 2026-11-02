@@ -320,18 +320,20 @@ if analysis:
             if fdata:
                 ratios = fdata.get("top_ratios", {}) or {}
                 groups = {
-                    "Market & valuation": ["Current Price", "P/E", "P/B", "Price-to-Sales", "Earnings Yield", "EPS", "Book Value per Share", "52-Week High", "52-Week Low"],
+                    "Market & valuation": ["Current Price", "P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Price-to-Sales", "Earnings Yield", "EPS", "Book Value per Share", "52-Week High", "52-Week Low"],
                     "Profitability & returns": ["ROE", "ROE (Calculated)", "ROCE", "ROA", "Revenue Growth", "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin", "PBT Margin", "Dividend Yield"],
                     "Debt & liquidity": ["Debt-to-Equity (Calculated)", "Current Ratio", "Interest Coverage (Calculated)", "Debt Service Coverage (Calculated)"],
                     "Efficiency & cash flow": ["Asset Turnover", "Operating Cash Flow / Net Profit", "Cash Flow Margin"],
                 }
                 percent_names = {"ROE", "ROE (Calculated)", "ROCE", "ROA", "Revenue Growth", "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin", "PBT Margin", "Dividend Yield", "Earnings Yield", "Cash Flow Margin"}
                 currency_names = {"Current Price", "EPS", "Book Value per Share", "52-Week High", "52-Week Low"}
-                multiple_names = {"P/E", "P/B", "Price-to-Sales", "Debt-to-Equity", "Debt-to-Equity (Reported)", "Debt-to-Equity (Calculated)", "Current Ratio", "Interest Coverage", "Interest Coverage (Reported)", "Interest Coverage (Calculated)", "Debt Service Coverage", "Debt Service Coverage (Reported)", "Debt Service Coverage (Calculated)", "Asset Turnover", "Operating Cash Flow / Net Profit"}
+                multiple_names = {"P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Price-to-Sales", "Debt-to-Equity", "Debt-to-Equity (Reported)", "Debt-to-Equity (Calculated)", "Current Ratio", "Interest Coverage", "Interest Coverage (Reported)", "Interest Coverage (Calculated)", "Debt Service Coverage", "Debt Service Coverage (Reported)", "Debt Service Coverage (Calculated)", "Asset Turnover", "Operating Cash Flow / Net Profit"}
                 ratio_help = {
                     "Current Price": "Latest available market price per share.",
-                    "P/E": "Price-to-Earnings: share price divided by earnings per share. Higher values imply investors pay more for each rupee of earnings.",
-                    "P/B": "Price-to-Book: market price per share divided by book value per share.",
+                    "P/E": "Provider-reported P/E. It may use trailing-twelve-month earnings and can differ from an annual-statement cross-check.",
+                    "P/E (Annual EPS Cross-check)": "Current price divided by the latest annual financial-statement EPS. This is a cross-check, not necessarily the provider's TTM P/E.",
+                    "P/B": "Provider-reported P/B. Its equity and share-count basis may differ from the annual-statement cross-check.",
+                    "P/B (Annual Book Value Cross-check)": "Current price divided by book value per share calculated from the latest annual statements. Compare only when share-count and equity definitions match.",
                     "Price-to-Sales": "Market value relative to annual revenue. Compare mainly within the same industry.",
                     "Earnings Yield": "Earnings per share divided by market price, expressed as a percentage. It is the inverse of P/E when inputs are consistent.",
                     "EPS": "Earnings Per Share: profit attributable to each ordinary share.",
@@ -558,7 +560,7 @@ if analysis:
                     }
                     pdf_currency_metrics = {"Current Price", "52-Week High", "52-Week Low", "Book Value per Share", "EPS"}
                     pdf_multiple_metrics = {
-                        "P/E", "P/B", "Debt-to-Equity", "Debt-to-Equity (Reported)", "Debt-to-Equity (Calculated)",
+                        "P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Debt-to-Equity", "Debt-to-Equity (Reported)", "Debt-to-Equity (Calculated)",
                         "Current Ratio", "Asset Turnover", "Interest Coverage", "Interest Coverage (Reported)", "Interest Coverage (Calculated)",
                         "Debt Service Coverage", "Debt Service Coverage (Reported)", "Debt Service Coverage (Calculated)", "Operating Cash Flow / Net Profit", "Price-to-Sales",
                     }
@@ -578,6 +580,33 @@ if analysis:
                         ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
                         ("FONTSIZE", (0, 0), (-1, -1), 8), ("PADDING", (0, 0), (-1, -1), 4),
                     ])))
+                    ratio_context = (
+                        f"Financial period: {escape(str(fdata.get('financial_period') or 'Not supplied'))} · "
+                        f"Ratio as-of date: {escape(str(fdata.get('ratio_as_of_date') or 'Not supplied'))} · "
+                        f"Ratio source: {escape(str(fdata.get('ratio_source') or 'Not supplied'))}"
+                    )
+                    story += [Spacer(1, 4), Paragraph(ratio_context, small)]
+                    story.append(Paragraph(
+                        "P/E and P/B annual cross-checks use the latest annual statement EPS/book value per share. "
+                        "Provider-reported market ratios may use TTM earnings, a different equity basis, or a different as-of date; "
+                        "the cross-checks are shown separately and do not overwrite provider values.", small
+                    ))
+                    quality = fdata.get("ratio_quality", {}) or {}
+                    if quality:
+                        quality_rows = [["Ratio", "Status", "Headline / note"]]
+                        for metric, detail in quality.items():
+                            quality_rows.append([
+                                escape(str(metric)),
+                                escape(str(detail.get("status", "—"))),
+                                Paragraph(escape(str(detail.get("message", ""))), small),
+                            ])
+                        story += [Spacer(1, 5), Paragraph("Ratio validation", styles["Heading3"])]
+                        story.append(Table(quality_rows, repeatRows=1, colWidths=[42 * mm, 30 * mm, 150 * mm], style=TableStyle([
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EDF3")),
+                            ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
+                            ("FONTSIZE", (0, 0), (-1, -1), 7), ("PADDING", (0, 0), (-1, -1), 4),
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ])))
                     for title, key in (("Profit & Loss — Annual", "profit_and_loss"),
                                        ("Balance Sheet — Annual", "balance_sheet"),
                                        ("Cash Flow — Annual", "cash_flow")):

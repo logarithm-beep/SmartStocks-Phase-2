@@ -16,7 +16,7 @@ import requests
 BASE_URL = "https://bharatstockapi.com"
 CACHE_TTL_SECONDS = 24 * 60 * 60
 STATEMENT_AMOUNT_DIVISOR = 10_000_000  # BharatStock statement amounts are returned in INR; display in INR crore.
-DATA_SCHEMA_VERSION = 5
+DATA_SCHEMA_VERSION = 6
 DAILY_APP_BUDGET = 55
 CACHE_DIR = Path(".smartstock_cache")
 DB_PATH = CACHE_DIR / "bharatstock_cache.sqlite"
@@ -46,7 +46,7 @@ def _connect():
 
 def _key(ticker, api_key):
     fingerprint = hashlib.sha256(api_key.encode()).hexdigest()
-    return hashlib.sha256(f"bharatstock-fundamentals-v5:{fingerprint}:{ticker.upper()}".encode()).hexdigest()
+    return hashlib.sha256(f"bharatstock-fundamentals-v6:{fingerprint}:{ticker.upper()}".encode()).hexdigest()
 
 
 def get_cache_info(ticker, api_key):
@@ -357,6 +357,15 @@ def _normalise(ticker, financial_payload, ratios_payload):
     if eps is not None:
         ratios["EPS"] = round(eps, 2)
     price = ratios.get("Current Price")
+
+    # Annual-statement cross-checks are deliberately separate from provider ratios.
+    # Provider P/E may use trailing-twelve-month EPS, while this calculation uses
+    # the latest annual statement EPS; similarly, book value may use a different
+    # share/equity basis. Never silently overwrite the provider's market ratios.
+    if price is not None and eps is not None and eps > 0:
+        ratios["P/E (Annual EPS Cross-check)"] = _ratio(price, eps)
+    if price is not None and book_value is not None and book_value > 0:
+        ratios["P/B (Annual Book Value Cross-check)"] = _ratio(price, book_value)
     if price is not None and revenue is not None and shares:
         market_cap = price * shares
         add("Price-to-Sales", _ratio(market_cap, revenue))
