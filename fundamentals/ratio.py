@@ -16,7 +16,7 @@ import requests
 BASE_URL = "https://bharatstockapi.com"
 CACHE_TTL_SECONDS = 24 * 60 * 60
 STATEMENT_AMOUNT_DIVISOR = 10_000_000  # BharatStock statement amounts are returned in INR; display in INR crore.
-DATA_SCHEMA_VERSION = 6
+DATA_SCHEMA_VERSION = 7
 DAILY_APP_BUDGET = 55
 CACHE_DIR = Path(".smartstock_cache")
 DB_PATH = CACHE_DIR / "bharatstock_cache.sqlite"
@@ -46,7 +46,7 @@ def _connect():
 
 def _key(ticker, api_key):
     fingerprint = hashlib.sha256(api_key.encode()).hexdigest()
-    return hashlib.sha256(f"bharatstock-fundamentals-v6:{fingerprint}:{ticker.upper()}".encode()).hexdigest()
+    return hashlib.sha256(f"bharatstock-fundamentals-v7:{fingerprint}:{ticker.upper()}".encode()).hexdigest()
 
 
 def get_cache_info(ticker, api_key):
@@ -199,16 +199,30 @@ def _normalise(ticker, financial_payload, ratios_payload):
 
     # Current market/valuation ratios supplied by BharatStock.
     provider_map = {
-        "price": "Current Price", "pe_ratio": "P/E", "pb_ratio": "P/B",
-        "roe": "ROE", "roce": "ROCE", "dividend_yield": "Dividend Yield",
-        "week_52_high": "52-Week High", "week_52_low": "52-Week Low",
+        "price": ("Current Price",),
+        "pe_ratio": ("Stock P/E",),
+        "pb_ratio": ("P/B",),
+        "roe": ("ROE",),
+        "roce": ("ROCE",),
+        "dividend_yield": ("Dividend Yield",),
+        "week_52_high": ("52-Week High",),
+        "week_52_low": ("52-Week Low",),
     }
-    for field, label in provider_map.items():
+    for field, labels in provider_map.items():
         value = _number(market, field)
         if value is None:
             value = _number(latest, field)
         if value is not None:
-            ratios[label] = round(value, 2)
+            for label in labels:
+                ratios[label] = round(value, 2)
+
+    # Preserve a provider-supplied book value if available; otherwise calculate
+    # it below from annual equity and the share count implied by paid-up capital.
+    provider_book_value = _number(
+        market, "book_value_per_share", "book_value", "book_value_per_share_ttm"
+    )
+    if provider_book_value is not None:
+        ratios["Book Value per Share (Provider)"] = round(provider_book_value, 2)
 
     revenue = _number(latest, "revenue", "total_income")
     prior_revenue = _number(previous, "revenue", "total_income")
@@ -348,15 +362,30 @@ def _normalise(ticker, financial_payload, ratios_payload):
 
     # Per-share valuation measures when paid-up capital and face value allow share count estimation.
     paid_up = _number(latest, "paid_up_equity_capital")
-    face_value = _number(latest, "face_value_per_share")
-    shares = paid_up / face_value if paid_up is not None and face_value else None
+    face_value = _number(latest, "face_value_per_share", "face_value")
+    shares = paid_up / face_value if paid_up is not None and face_value and face_value > 0 else None
     book_value = _ratio(equity, shares) if shares else None
     if book_value is not None:
-        ratios["Book Value per Share"] = book_value
+        ratios["Book Value per Share (Calculated)"] = book_value
+        # Keep the familiar label as the annual-statement calculation when no
+        # provider book-value field is available.
+        if provider_book_value is None:
+            ratios["Book Value per Share"] = book_value
+    if face_value is not None:
+        ratios["Face Value"] = round(face_value, 2)
     eps = _number(latest, "eps")
     if eps is not None:
         ratios["EPS"] = round(eps, 2)
     price = ratios.get("Current Price")
+    # Market cap is preferably sourced from the provider. When unavailable,
+    # estimate it from price × shares inferred from paid-up capital / face value.
+    provider_market_cap_cr = _number(market, "market_cap_cr", "market_cap_crore", "market_capitalisation_cr")
+    if provider_market_cap_cr is not None:
+        ratios["Market Cap"] = round(provider_market_cap_cr, 2)
+        market_cap_basis = "Provider-reported ₹ crore"
+    elif price is not None and shares is not None:
+        ratios["Market Cap (Estimated)"] = round(price * shares, 2)
+        market_cap_basis = "Estimated from price × shares inferred from paid-up capital / face value"
 
     # Annual-statement cross-checks are deliberately separate from provider ratios.
     # Provider P/E may use trailing-twelve-month EPS, while this calculation uses
@@ -369,9 +398,10 @@ def _normalise(ticker, financial_payload, ratios_payload):
     if price is not None and revenue is not None and shares:
         market_cap = price * shares
         add("Price-to-Sales", _ratio(market_cap, revenue))
-    pe = ratios.get("P/E")
-    if pe and pe > 0:
-        ratios["Earnings Yield"] = round(100 / pe, 2)
+    # Earnings yield is calculated from the same annual EPS and current price
+    # used by the annual P/E cross-check, so the two remain mathematically aligned.
+    if price is not None and eps is not None and price > 0:
+        ratios["Earnings Yield (Annual EPS)"] = round((eps / price) * 100, 2)
 
     return {
         "provider": "BharatStock", "symbol": ticker, "data_schema_version": DATA_SCHEMA_VERSION,
@@ -390,12 +420,15 @@ def _normalise(ticker, financial_payload, ratios_payload):
         ),
         "ratio_rows": len(_rows(ratios_payload)), "api_calls_for_fetch": 2,
         "ratio_source": "BharatStock current ratios + locally calculated statement ratios",
+        "market_cap_basis": locals().get("market_cap_basis", "Unavailable: market capitalisation and share-count inputs not supplied"),
         "ratio_validation_warnings": validation,
         "ratio_quality": ratio_quality,
         "ratio_reported_audit": reported_values,
         "ratio_calculation_notes": ratio_notes,
         "ratio_input_values": {
             "gross_debt": borrowings, "equity_attributable_to_owners": equity,
+            "paid_up_equity_capital_cr": paid_up, "face_value_per_share": face_value,
+            "estimated_shares_crore": shares, "book_value_per_share_calculated": book_value,
             "ebit_or_operating_profit_proxy": ebit, "interest_expense_or_finance_cost_proxy": interest_expense,
             "cash_available_for_debt_service": cash_available,
             "principal_repayments": principal, "dscr_interest_expense": dscr_interest,

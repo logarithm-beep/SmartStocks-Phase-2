@@ -320,24 +320,32 @@ if analysis:
             if fdata:
                 ratios = fdata.get("top_ratios", {}) or {}
                 groups = {
-                    "Market & valuation": ["Current Price", "P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Price-to-Sales", "Earnings Yield", "EPS", "Book Value per Share", "52-Week High", "52-Week Low"],
+                    "Market & valuation": ["Market Cap", "Market Cap (Estimated)", "Current Price", "Stock P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Price-to-Sales", "Earnings Yield (Annual EPS)", "EPS", "Book Value per Share (Provider)", "Book Value per Share", "Book Value per Share (Calculated)", "Face Value", "52-Week High", "52-Week Low"],
                     "Profitability & returns": ["ROE", "ROE (Calculated)", "ROCE", "ROA", "Revenue Growth", "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin", "PBT Margin", "Dividend Yield"],
                     "Debt & liquidity": ["Debt-to-Equity (Calculated)", "Current Ratio", "Interest Coverage (Calculated)", "Debt Service Coverage (Calculated)"],
                     "Efficiency & cash flow": ["Asset Turnover", "Operating Cash Flow / Net Profit", "Cash Flow Margin"],
                 }
-                percent_names = {"ROE", "ROE (Calculated)", "ROCE", "ROA", "Revenue Growth", "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin", "PBT Margin", "Dividend Yield", "Earnings Yield", "Cash Flow Margin"}
-                currency_names = {"Current Price", "EPS", "Book Value per Share", "52-Week High", "52-Week Low"}
-                multiple_names = {"P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Price-to-Sales", "Debt-to-Equity", "Debt-to-Equity (Reported)", "Debt-to-Equity (Calculated)", "Current Ratio", "Interest Coverage", "Interest Coverage (Reported)", "Interest Coverage (Calculated)", "Debt Service Coverage", "Debt Service Coverage (Reported)", "Debt Service Coverage (Calculated)", "Asset Turnover", "Operating Cash Flow / Net Profit"}
+                percent_names = {"ROE", "ROE (Calculated)", "ROCE", "ROA", "Revenue Growth", "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin", "PBT Margin", "Dividend Yield", "Earnings Yield", "Earnings Yield (Annual EPS)", "Cash Flow Margin"}
+                currency_names = {"Current Price", "EPS", "Book Value per Share", "Book Value per Share (Provider)", "Book Value per Share (Calculated)", "Face Value", "52-Week High", "52-Week Low"}
+                crore_names = {"Market Cap", "Market Cap (Estimated)"}
+                multiple_names = {"P/E", "Stock P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Price-to-Sales", "Debt-to-Equity", "Debt-to-Equity (Reported)", "Debt-to-Equity (Calculated)", "Current Ratio", "Interest Coverage", "Interest Coverage (Reported)", "Interest Coverage (Calculated)", "Debt Service Coverage", "Debt Service Coverage (Reported)", "Debt Service Coverage (Calculated)", "Asset Turnover", "Operating Cash Flow / Net Profit"}
                 ratio_help = {
+                    "Market Cap": "Provider-reported market capitalisation in ₹ crore.",
+                    "Market Cap (Estimated)": "Estimated market capitalisation: current price multiplied by shares inferred from paid-up equity capital divided by face value. Treat as an estimate, not an exchange-confirmed figure.",
+                    "Stock P/E": "Provider-reported stock P/E. It may use trailing-twelve-month earnings and can differ from the annual EPS cross-check.",
+                    "Face Value": "Face value per ordinary share from the latest annual financial statement.",
                     "Current Price": "Latest available market price per share.",
                     "P/E": "Provider-reported P/E. It may use trailing-twelve-month earnings and can differ from an annual-statement cross-check.",
                     "P/E (Annual EPS Cross-check)": "Current price divided by the latest annual financial-statement EPS. This is a cross-check, not necessarily the provider's TTM P/E.",
                     "P/B": "Provider-reported P/B. Its equity and share-count basis may differ from the annual-statement cross-check.",
                     "P/B (Annual Book Value Cross-check)": "Current price divided by book value per share calculated from the latest annual statements. Compare only when share-count and equity definitions match.",
                     "Price-to-Sales": "Market value relative to annual revenue. Compare mainly within the same industry.",
-                    "Earnings Yield": "Earnings per share divided by market price, expressed as a percentage. It is the inverse of P/E when inputs are consistent.",
+                    "Earnings Yield": "Provider P/E inverse, where available.",
+                    "Earnings Yield (Annual EPS)": "Latest annual EPS divided by current price. This is the inverse of the annual EPS P/E cross-check, not necessarily provider TTM P/E.",
                     "EPS": "Earnings Per Share: profit attributable to each ordinary share.",
-                    "Book Value per Share": "Net assets attributable to ordinary shareholders divided by shares outstanding.",
+                    "Book Value per Share": "Annual-statement book value per share calculated from equity attributable to owners and shares inferred from paid-up capital / face value.",
+                    "Book Value per Share (Provider)": "Book value per share supplied directly by the market-ratios provider.",
+                    "Book Value per Share (Calculated)": "Annual-statement book value per share calculated from equity attributable to owners and inferred shares outstanding.",
                     "52-Week High": "Highest recorded market price over the last 52 weeks.",
                     "52-Week Low": "Lowest recorded market price over the last 52 weeks.",
                     "ROE": "Return on Equity: profit relative to shareholders' equity. Higher values can indicate more efficient use of equity.",
@@ -368,9 +376,11 @@ if analysis:
                     st.markdown(f"#### {group_name}")
                     cols = st.columns(3)
                     for i, (name, value) in enumerate(present):
-                        shown = f"{value:,.2f}%" if name in percent_names else (f"₹{value:,.2f}" if name in currency_names else (f"{value:,.2f}x" if name in multiple_names else f"{value:,.2f}"))
+                        shown = f"{value:,.2f}%" if name in percent_names else (f"₹{value:,.2f} Cr." if name in crore_names else (f"₹{value:,.2f}" if name in currency_names else (f"{value:,.2f}x" if name in multiple_names else f"{value:,.2f}")))
                         help_text = ratio_help.get(name, "Financial metric returned by the data source. Review its definition and reporting period before comparing companies.")
                         cols[i % 3].metric(f"ⓘ {name}", shown, help=help_text)
+                if fdata.get("market_cap_basis") and ratios.get("Market Cap (Estimated)") is not None:
+                    st.caption("Market cap basis: " + str(fdata["market_cap_basis"]) + ". This is an estimate, not an exchange-confirmed market-cap figure.")
                 if not any_metric:
                     st.info("Valuation and ratio data is not available for this company in the current API response.")
             else:
@@ -556,11 +566,11 @@ if analysis:
                     pdf_percent_metrics = {
                         "Revenue Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin",
                         "PBT Margin", "ROA", "ROE", "ROE (Calculated)", "ROCE", "Dividend Yield",
-                        "Cash Flow Margin", "EPS Growth", "Earnings Yield",
+                        "Cash Flow Margin", "EPS Growth", "Earnings Yield", "Earnings Yield (Annual EPS)",
                     }
-                    pdf_currency_metrics = {"Current Price", "52-Week High", "52-Week Low", "Book Value per Share", "EPS"}
+                    pdf_currency_metrics = {"Current Price", "52-Week High", "52-Week Low", "Book Value per Share", "Book Value per Share (Provider)", "Book Value per Share (Calculated)", "EPS", "Face Value"}
                     pdf_multiple_metrics = {
-                        "P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Debt-to-Equity", "Debt-to-Equity (Reported)", "Debt-to-Equity (Calculated)",
+                        "P/E", "Stock P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Debt-to-Equity", "Debt-to-Equity (Reported)", "Debt-to-Equity (Calculated)",
                         "Current Ratio", "Asset Turnover", "Interest Coverage", "Interest Coverage (Reported)", "Interest Coverage (Calculated)",
                         "Debt Service Coverage", "Debt Service Coverage (Reported)", "Debt Service Coverage (Calculated)", "Operating Cash Flow / Net Profit", "Price-to-Sales",
                     }
@@ -568,9 +578,11 @@ if analysis:
                     for k, v in (fdata.get("top_ratios", {}) or {}).items():
                         if isinstance(v, (int, float)):
                             shown_value = f"{v:,.2f}%" if k in pdf_percent_metrics else (
+                                f"₹{v:,.2f} Cr." if k in {"Market Cap", "Market Cap (Estimated)"} else (
                                 f"₹{v:,.2f}" if k in pdf_currency_metrics else (
                                     f"{v:,.2f}x" if k in pdf_multiple_metrics else f"{v:,.2f}"
                                 )
+                            )
                             )
                         else:
                             shown_value = escape(str(v))
@@ -581,6 +593,7 @@ if analysis:
                         ("FONTSIZE", (0, 0), (-1, -1), 8), ("PADDING", (0, 0), (-1, -1), 4),
                     ])))
                     ratio_context = (
+                        f"Market-cap basis: {escape(str(fdata.get('market_cap_basis') or 'Not supplied'))} · "
                         f"Financial period: {escape(str(fdata.get('financial_period') or 'Not supplied'))} · "
                         f"Ratio as-of date: {escape(str(fdata.get('ratio_as_of_date') or 'Not supplied'))} · "
                         f"Ratio source: {escape(str(fdata.get('ratio_source') or 'Not supplied'))}"
