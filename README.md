@@ -84,7 +84,6 @@ Official source references:
 - NSE: https://www.nseindia.com/static/market-data/securities-available-for-trading
 - BSE scrip master format: https://www.bseindia.com/markets/MarketInfo/DownloadAttach.aspx?attachedId=e99e2ca5-95d7-4173-83da-7774412bbb2d&id=20220531-44
 
-
 ## Phase 2 consolidated update
 
 This build consolidates the requested Phase 2 work into one project folder.
@@ -107,7 +106,6 @@ This build consolidates the requested Phase 2 work into one project folder.
 ### Fundamental and reporting tabs
 - Fundamental Analysis uses the configured BharatStock API key from `.env`; shows available ratios, annual P&L and balance-sheet data.
 - Valuation tab surfaces available P/E, P/B, book value, ROE, ROCE, dividend yield, market cap and current price fields.
-- Peer Comparison fetches entered NSE peer symbols through BharatStock.
 - Reports tab exports price/indicator CSV, Excel workbook and PDF summary.
 - Added `openpyxl` and `reportlab` dependencies for exports.
 
@@ -122,7 +120,6 @@ Run:
 `streamlit run app.py`
 
 **Known integration limitation:** BSE stock discovery/search is enabled, but the historical OHLCV provider in this build remains NSE-specific. A BSE result is clearly identified and is not incorrectly sent to the NSE endpoint. BSE price history requires a separate provider integration.
-
 
 ## BharatStock fundamentals, valuation and reports
 
@@ -149,7 +146,6 @@ The local request safety limit is 55 requests per local calendar day. It only co
 - The Fundamentals tab is now focused on the annual Profit & Loss, Balance Sheet and Cash Flow statements, each in its own expandable section.
 - Annual statements request two periods. The interface and PDF describe this as a two-year history; unavailable periods are not fabricated.
 - The Valuation tab contains the available market, valuation, profitability, leverage, liquidity, efficiency and cash-flow ratios in grouped sections. Percentage metrics retain the familiar `%` display.
-- Peer Comparison now uses a searchable company-name/symbol selector backed by the local NSE stock master. Users can type a company name and select it without knowing its exact ticker. Peer data availability still depends on BharatStock coverage and API quota.
 
 ### Ratio validation and calculation transparency
 - Debt-to-Equity, Interest Coverage and Debt Service Coverage are kept as separate reported and calculated metrics when both are available; one never silently replaces the other.
@@ -158,7 +154,6 @@ The local request safety limit is 55 requests per local calendar day. It only co
 - Debt Service Coverage is calculated only when cash available for debt service, principal repayments and interest expense are all present. Otherwise the calculated metric is omitted and the app explains which inputs are missing.
 - Material differences between reported and calculated ratios are flagged in Valuation and in the PDF report. Check the fiscal year, standalone/consolidated basis and provider definitions before relying on either value.
 - Missing inputs are not replaced with zero. Provider-reported values remain labelled as reported values.
-
 
 ## Ratio validation and statement units (latest update)
 
@@ -206,7 +201,6 @@ Share count is estimated from paid-up equity capital / face value. Metrics requi
 - The dashboard and PDF show the financial period and market-price date. The PDF includes key calculation inputs and methodology notes.
 
 These formulas were tested with synthetic financial statement data. Live BharatStock field mapping and company-specific reported values still require verification against the provider response.
-
 
 ## Dynamic market valuation
 

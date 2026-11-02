@@ -142,7 +142,6 @@ if st.button("Fetch Data", type="primary", key="fetch_stock_data"):
                 }
                 # Changing the selected company clears old company-specific data.
                 st.session_state.pop(f"fundamentals_{ticker}", None)
-                st.session_state.pop(f"peers_{ticker}", None)
                 st.success(f"Analysis loaded for {ticker}.")
             except ValueError as exc:
                 st.error(f"Unable to fetch/analyse this stock: {exc}")
@@ -181,9 +180,9 @@ if analysis:
         c3.metric("⬆️ High in selected period", f"₹{df['High'].max():,.2f}" if "High" in df.columns else "N/A")
         c4.metric("⬇️ Low in selected period", f"₹{df['Low'].min():,.2f}" if "Low" in df.columns else "N/A")
 
-        overview, technical, performance, risk_tab, fundamentals, valuation, peers, reports = st.tabs([
+        overview, technical, performance, risk_tab, fundamentals, valuation, reports = st.tabs([
             "📊 Overview", "📈 Technical", "💰 Performance", "⚠️ Risk",
-            "🔎 Fundamentals", "💎 Valuation", "🆚 Peer Comparison", "📄 Reports",
+            "🔎 Fundamentals", "💎 Valuation", "📄 Reports",
         ])
 
         with overview:
@@ -439,144 +438,6 @@ if analysis:
             else:
                 st.info("Load BharatStock data in Fundamentals first.")
 
-        with peers:
-            st.subheader("Peer Comparison")
-            st.caption("Search by company name or symbol, then select one or more companies. You do not need to know the ticker.")
-            peer_universe = stocks.copy()
-            peer_universe = peer_universe[peer_universe["SYMBOL"].ne(ticker_loaded)]
-            peer_universe = peer_universe[peer_universe["EXCHANGE"].str.upper().eq("NSE")]
-            peer_universe = peer_universe.drop_duplicates(subset=["SYMBOL"], keep="first")
-            peer_universe["PEER_LABEL"] = peer_universe.apply(
-                lambda r: f"{r['NAME OF COMPANY']} ({r['SYMBOL']})", axis=1
-            )
-            peer_labels = peer_universe["PEER_LABEL"].drop_duplicates().tolist()
-            selected_peer_labels = st.multiselect(
-                "Find and select peer companies",
-                options=peer_labels,
-                key=f"peer_select_{ticker_loaded}",
-                placeholder="Type a company name or ticker to search...",
-            )
-            if st.button("Compare Selected Companies", key=f"compare_peers_{ticker_loaded}"):
-                if not api_key:
-                    st.error("BHARATSTOCK_API_KEY not found in Streamlit Secrets or local .env.")
-                elif not selected_peer_labels:
-                    st.warning("Search for and select at least one peer company.")
-                else:
-                    label_to_symbol = dict(zip(peer_universe["PEER_LABEL"], peer_universe["SYMBOL"]))
-                    symbols = list(dict.fromkeys([ticker_loaded] + [label_to_symbol[x] for x in selected_peer_labels]))
-                    company_names = dict(zip(stocks["SYMBOL"], stocks["NAME OF COMPANY"]))
-                    company_names.setdefault(ticker_loaded, ticker_loaded)
-                    rows = []
-                    progress = st.progress(0)
-                    peer_errors = []
-                    # Keep the comparison table focused on the requested metrics.
-                    ratio_columns = [
-                        "Face Value", "EPS", "Book Value per Share", "PBT Margin",
-                        "P/E (Annual)", "P/B", "ROE", "ROCE", "ROA",
-                    ]
-
-                    def _latest_close(frame):
-                        if frame is None or getattr(frame, "empty", True):
-                            return None
-                        close_col = next((c for c in ("Close", "close", "CLOSE", "Adj Close") if c in frame.columns), None)
-                        if close_col is None:
-                            return None
-                        values = pd.to_numeric(frame[close_col], errors="coerce").dropna()
-                        return float(values.iloc[-1]) if not values.empty else None
-
-                    for index, peer in enumerate(symbols, start=1):
-                        company_label = f"{company_names.get(peer, peer)} ({peer})"
-                        row = {"Company": company_label, "Share Price": None}
-                        peer_prices = None
-                        peer_price = None
-
-                        # Fetch market price independently; do not silently discard
-                        # provider errors because that made every price appear as N/A.
-                        try:
-                            peer_prices, _ = fetch_stock_data(peer, period="1y")
-                            peer_price = _latest_close(peer_prices)
-                            if peer_price is None:
-                                peer_errors.append(f"{peer}: market feed returned no usable closing price.")
-                        except Exception as exc:
-                            peer_errors.append(f"{peer}: market price lookup failed ({type(exc).__name__}: {exc}).")
-
-                        # For the currently loaded company, reuse the chart dataframe
-                        # if the separate peer lookup did not return a close.
-                        if peer_price is None and peer == ticker_loaded:
-                            try:
-                                peer_price = _latest_close(df)
-                                if peer_price is not None:
-                                    peer_prices = df
-                            except Exception:
-                                pass
-                        row["Share Price"] = peer_price
-
-                        try:
-                            peer_data = get_fundamental_data(
-                                peer, api_key, market_price=peer_price, price_history=peer_prices
-                            )
-                            ratios = peer_data.get("top_ratios") or {}
-                            for column in ratio_columns:
-                                row[column] = ratios.get(column)
-                            if not ratios:
-                                row_count = peer_data.get("available_financial_rows", 0)
-                                periods = [
-                                    item.get("fiscal_year") or item.get("period_end_date")
-                                    for item in (peer_data.get("profit_and_loss") or [])[:2]
-                                ]
-                                peer_errors.append(
-                                    f"{peer}: BharatStock returned {row_count} annual row(s), but none of the requested ratios could be calculated. "
-                                    f"Periods: {periods or 'not identified'}. Check the provider's filed fields and statement coverage."
-                                )
-                        except (BharatStockDailyBudgetError, BharatStockRateLimitError) as exc:
-                            peer_errors.append(f"{peer}: {exc}")
-                            for column in ratio_columns:
-                                row[column] = None
-                            rows.append(row)
-                            if isinstance(exc, BharatStockDailyBudgetError):
-                                remaining = {"Company": "Remaining peers", "Share Price": None}
-                                remaining.update({column: None for column in ratio_columns})
-                                rows.append(remaining)
-                                break
-                        except Exception as exc:
-                            peer_errors.append(f"{peer}: financial data lookup/calculation failed ({type(exc).__name__}: {exc}).")
-                            for column in ratio_columns:
-                                row[column] = None
-                        rows.append(row)
-                        progress.progress(index / len(symbols))
-
-                    if peer_errors:
-                        with st.expander("Peer data diagnostics", expanded=True):
-                            for message in peer_errors:
-                                st.warning(message)
-                    peer_frame = pd.DataFrame(rows)
-                    # Share Price follows Company. Display units explicitly so
-                    # percentages and valuation multiples cannot be confused.
-                    currency_columns = ["Share Price", "Face Value", "EPS", "Book Value per Share"]
-                    percentage_columns = ["PBT Margin", "ROE", "ROCE", "ROA"]
-                    multiple_columns = ["P/E (Annual)", "P/B"]
-                    for column in currency_columns:
-                        if column in peer_frame.columns:
-                            peer_frame[column] = peer_frame[column].apply(
-                                lambda value: f"₹{float(value):,.2f}" if pd.notna(value) else "N/A"
-                            )
-                    for column in percentage_columns:
-                        if column in peer_frame.columns:
-                            peer_frame[column] = peer_frame[column].apply(
-                                lambda value: f"{float(value):.2f}%" if pd.notna(value) else "N/A"
-                            )
-                    for column in multiple_columns:
-                        if column in peer_frame.columns:
-                            peer_frame[column] = peer_frame[column].apply(
-                                lambda value: f"{float(value):.2f}x" if pd.notna(value) else "N/A"
-                            )
-                    preferred_columns = ["Company", "Share Price"] + ratio_columns
-                    peer_frame = peer_frame.reindex(columns=preferred_columns)
-                    st.session_state[f"peers_{ticker_loaded}"] = peer_frame
-            peer_frame = st.session_state.get(f"peers_{ticker_loaded}")
-            if peer_frame is not None:
-                st.dataframe(peer_frame, use_container_width=True, hide_index=True)
-
         with reports:
             st.subheader("Reports & Exports")
             st.download_button(
@@ -618,9 +479,6 @@ if analysis:
                                     elif "(₹/share)" in header:
                                         for row_idx in range(2, worksheet.max_row + 1):
                                             worksheet.cell(row=row_idx, column=col_idx).number_format = '"₹ "#,##0.00'
-                    peer_frame = st.session_state.get(f"peers_{ticker_loaded}")
-                    if peer_frame is not None:
-                        peer_frame.to_excel(writer, sheet_name="Peer Comparison", index=False)
                 st.download_button(
                     "Download Excel Report",
                     excel_buffer.getvalue(),
