@@ -209,3 +209,8 @@ These formulas were tested with synthetic financial statement data. Live BharatS
 - Use **Refresh Market Data** to fetch a newer available closing price. This does not call BharatStock again.
 - This is latest-available closing-price data, not an intraday/live quote. Market data availability depends on the TejHQ feed.
 - Annual P/E remains annual EPS-based; TTM P/E is not shown until quarterly statements are integrated.
+
+### Dashboard navigation and fundamentals loading
+
+The dashboard uses a stateful section selector rather than `st.tabs()`, so Streamlit reruns (including **Load Fundamental Data**) keep the user on the selected section. Fundamental statements are fetched using the ticker of the currently loaded analysis, which must match the stock selected in the search control. If a different stock is selected, click **Fetch Data** for that stock first, then open **Fundamentals** and click **Load Fundamental Data**.
+

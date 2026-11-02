@@ -180,12 +180,20 @@ if analysis:
         c3.metric("⬆️ High in selected period", f"₹{df['High'].max():,.2f}" if "High" in df.columns else "N/A")
         c4.metric("⬇️ Low in selected period", f"₹{df['Low'].min():,.2f}" if "Low" in df.columns else "N/A")
 
-        overview, technical, performance, risk_tab, fundamentals, valuation, reports = st.tabs([
+        dashboard_sections = [
             "📊 Overview", "📈 Technical", "💰 Performance", "⚠️ Risk",
             "🔎 Fundamentals", "💎 Valuation", "📄 Reports",
-        ])
+        ]
+        active_section = st.segmented_control(
+            "Dashboard section",
+            options=dashboard_sections,
+            default="📊 Overview",
+            key="active_dashboard_section",
+            selection_mode="single",
+            label_visibility="collapsed",
+        ) or "📊 Overview"
 
-        with overview:
+        if active_section == "📊 Overview":
             st.subheader("Technical Signal")
             st.caption(result["Method"] + " Scores are descriptive indicators, not guaranteed predictions.")
             signal = result["Signal"]
@@ -213,7 +221,7 @@ if analysis:
                 "BUY ≥ +3; SELL ≤ −3; otherwise HOLD."
             )
 
-        with technical:
+        if active_section == "📈 Technical":
             st.subheader("Technical Analysis")
             try:
                 fig = plot_price_chart(
@@ -224,7 +232,7 @@ if analysis:
             except Exception as exc:
                 st.warning(f"Unable to draw the technical chart: {exc}")
 
-        with performance:
+        if active_section == "💰 Performance":
             st.subheader("Historical Performance")
             returns = performance_returns(df)
             cols = st.columns(5)
@@ -236,7 +244,7 @@ if analysis:
                 "each calendar lookback. N/A means insufficient history."
             )
 
-        with risk_tab:
+        if active_section == "⚠️ Risk":
             st.subheader("Risk Metrics")
             r1, r2 = st.columns(2)
             r1.metric(
@@ -263,8 +271,9 @@ if analysis:
         if not api_key:
             api_key = os.getenv("BHARATSTOCK_API_KEY", "")
 
-        with fundamentals:
-            st.subheader("Fundamental Analysis")
+        if active_section == "🔎 Fundamentals":
+            st.subheader(f"Fundamental Analysis — {ticker_loaded}")
+            st.caption(f"Fundamental statements will be loaded for the selected stock: {ticker_loaded}.")
             if api_key:
                 cache_info = get_cache_info(ticker_loaded, api_key)
                 cache_label = "Fresh local cache available" if cache_info["fresh"] else (
@@ -288,7 +297,7 @@ if analysis:
                                 market_price=current_price, price_history=df,
                             )
                         st.session_state[f"fundamentals_{ticker_loaded}"] = data
-                        st.success(f"Statements loaded · {data.get('api_calls_for_fetch', 0)} API call(s) used · cache {data.get('cache_status', 'MISS')}")
+                        st.success(f"Statements loaded for {ticker_loaded} · {data.get('api_calls_for_fetch', 0)} API call(s) used · cache {data.get('cache_status', 'MISS')}")
                     except BharatStockDailyBudgetError as exc:
                         st.warning(str(exc))
                     except BharatStockRateLimitError as exc:
@@ -326,7 +335,7 @@ if analysis:
                 st.info("Load BharatStock data for the selected company. API coverage may vary.")
 
         fdata = st.session_state.get(f"fundamentals_{ticker_loaded}")
-        with valuation:
+        if active_section == "💎 Valuation":
             st.subheader("Valuation")
             refresh_market_col, market_status_col = st.columns([1, 2])
             refresh_market_clicked = refresh_market_col.button(
@@ -438,7 +447,7 @@ if analysis:
             else:
                 st.info("Load BharatStock data in Fundamentals first.")
 
-        with reports:
+        if active_section == "📄 Reports":
             st.subheader("Reports & Exports")
             st.download_button(
                 "Download CSV",
