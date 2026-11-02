@@ -178,3 +178,18 @@ Note: The conversion follows the BharatStock payload's INR-denominated values ob
 - Excel statement sheets keep numeric values for sorting and formulas, label monetary columns `(₹ Cr.)`, and apply a visible `₹ Cr.` number format. Per-share fields such as EPS remain in rupees per share; ratio fields remain in their native units.
 - The statement display formatter is presentation-only and does not convert the normalized values a second time.
 >>>>>>> 217903b (Deploy phase 2)
+
+## Fundamental ratio methodology (current build)
+
+SmartStocks requests annual financial statements from BharatStock only. It does **not** call the BharatStock valuation/ratios endpoint and does not display provider-supplied P/E, P/B, ROE, ROCE or dividend-yield values. Ratios are calculated locally from the annual statement inputs plus the latest TejHQ closing price.
+
+- P/E = latest TejHQ close / latest annual EPS.
+- Book value per share = equity attributable to owners / estimated shares outstanding.
+- P/B = latest TejHQ close / calculated book value per share.
+- Market capitalisation = latest TejHQ close × estimated shares outstanding (₹ crore).
+- ROE = annual net profit attributable to owners / average opening and closing equity.
+- ROA = annual net profit / average opening and closing total assets.
+- ROCE = EBIT (or operating profit when EBIT is not supplied) / closing capital employed (total assets less current liabilities).
+- Dividend yield = annual dividend per share / latest TejHQ close; omitted when dividend-per-share input is unavailable.
+
+Share count is estimated from paid-up equity capital / face value. Metrics requiring missing inputs are omitted. The 52-week high/low is shown only when the fetched price history covers approximately one year. The dashboard includes a statement refresh control to bypass the 24-hour local statement cache.

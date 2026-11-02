@@ -257,7 +257,7 @@ if analysis:
             st.caption("Maximum drawdown is the largest peak-to-trough decline in the selected history.")
 
         load_dotenv()
-        api_key = os.getenv("BHARATSTOCK_API_KEY")
+        api_key = st.secrets.get("BHARATSTOCK_API_KEY", os.getenv("BHARATSTOCK_API_KEY", ""))
 
         with fundamentals:
             st.subheader("Fundamental Analysis")
@@ -270,15 +270,21 @@ if analysis:
                     f"BharatStock cache: {cache_label} · SmartStock API calls today: "
                     f"{cache_info['calls_today']}/{cache_info['daily_limit']} calls today · {cache_info['calls_remaining']} remaining"
                 )
-            if st.button("Load Fundamental Data", key=f"load_fundamentals_{ticker_loaded}"):
+            load_col, refresh_col = st.columns(2)
+            load_clicked = load_col.button("Load Fundamental Data", key=f"load_fundamentals_{ticker_loaded}")
+            refresh_clicked = refresh_col.button("↻ Refresh Statements", key=f"refresh_fundamentals_{ticker_loaded}", help="Bypass the 24-hour statement cache. Uses one BharatStock annual-financials request.")
+            if load_clicked or refresh_clicked:
                 if not api_key:
-                    st.error("BHARATSTOCK_API_KEY not found in .env.")
+                    st.error("BHARATSTOCK_API_KEY not found in Streamlit Secrets or local .env.")
                 else:
                     try:
-                        with st.spinner(f"Loading BharatStock data for {ticker_loaded}..."):
-                            data = get_fundamental_data(ticker_loaded, api_key)
+                        with st.spinner(f"Loading annual statements for {ticker_loaded} and calculating ratios..."):
+                            data = get_fundamental_data(
+                                ticker_loaded, api_key, force_refresh=refresh_clicked,
+                                market_price=current_price, price_history=df,
+                            )
                         st.session_state[f"fundamentals_{ticker_loaded}"] = data
-                        st.success(f"Fundamental data loaded · {data.get('api_calls_for_fetch', 1)} API call(s) used · cache {data.get('cache_status', 'MISS')}")
+                        st.success(f"Statements loaded · {data.get('api_calls_for_fetch', 0)} API call(s) used · cache {data.get('cache_status', 'MISS')}")
                     except BharatStockDailyBudgetError as exc:
                         st.warning(str(exc))
                     except BharatStockRateLimitError as exc:
@@ -292,10 +298,11 @@ if analysis:
                     f"Annual financial statements · {fdata.get('financial_rows', 0)} year(s) returned by BharatStock. "
                     + fdata.get("financial_history_limit_note", "")
                 )
+                st.caption(f"Calculation source: {fdata.get('ratio_source', 'SmartStocks local calculations')} · Financial period: {fdata.get('financial_period') or 'Not supplied'} · TejHQ closing price date: {fdata.get('market_price_date') or 'Not supplied'}")
                 pnl = rows_to_frame(fdata.get("profit_and_loss", []))
                 bs = rows_to_frame(fdata.get("balance_sheet", []))
                 cf = rows_to_frame(fdata.get("cash_flow", []))
-                st.caption("All statement amounts are displayed in ₹ crore. EPS, per-share values and ratios retain their original units.")
+                st.caption("BharatStock supplies annual financial statements only. SmartStocks calculates every displayed ratio locally; no BharatStock valuation/ratios endpoint is used. Statement amounts are ₹ crore; per-share values are ₹/share.")
                 with st.expander("Profit & Loss — Annual history", expanded=True):
                     if not pnl.empty:
                         st.dataframe(format_statement_frame(pnl), use_container_width=True, hide_index=True)
@@ -320,37 +327,30 @@ if analysis:
             if fdata:
                 ratios = fdata.get("top_ratios", {}) or {}
                 groups = {
-                    "Market & valuation": ["Market Cap", "Market Cap (Estimated)", "Current Price", "Stock P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Price-to-Sales", "Earnings Yield (Annual EPS)", "EPS", "Book Value per Share (Provider)", "Book Value per Share", "Book Value per Share (Calculated)", "Face Value", "52-Week High", "52-Week Low"],
-                    "Profitability & returns": ["ROE", "ROE (Calculated)", "ROCE", "ROA", "Revenue Growth", "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin", "PBT Margin", "Dividend Yield"],
-                    "Debt & liquidity": ["Debt-to-Equity (Calculated)", "Current Ratio", "Interest Coverage (Calculated)", "Debt Service Coverage (Calculated)"],
+                    "Market & valuation": ["Market Cap", "Current Price", "P/E", "P/B", "Price-to-Sales", "Earnings Yield", "EPS", "Book Value per Share", "Face Value", "52-Week High", "52-Week Low"],
+                    "Profitability & returns": ["ROE", "ROCE", "ROA", "Revenue Growth", "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin", "PBT Margin", "Dividend per Share", "Dividend Yield"],
+                    "Debt & liquidity": ["Debt-to-Equity", "Current Ratio", "Interest Coverage"],
                     "Efficiency & cash flow": ["Asset Turnover", "Operating Cash Flow / Net Profit", "Cash Flow Margin"],
                 }
-                percent_names = {"ROE", "ROE (Calculated)", "ROCE", "ROA", "Revenue Growth", "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin", "PBT Margin", "Dividend Yield", "Earnings Yield", "Earnings Yield (Annual EPS)", "Cash Flow Margin"}
-                currency_names = {"Current Price", "EPS", "Book Value per Share", "Book Value per Share (Provider)", "Book Value per Share (Calculated)", "Face Value", "52-Week High", "52-Week Low"}
-                crore_names = {"Market Cap", "Market Cap (Estimated)"}
-                multiple_names = {"P/E", "Stock P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Price-to-Sales", "Debt-to-Equity", "Debt-to-Equity (Reported)", "Debt-to-Equity (Calculated)", "Current Ratio", "Interest Coverage", "Interest Coverage (Reported)", "Interest Coverage (Calculated)", "Debt Service Coverage", "Debt Service Coverage (Reported)", "Debt Service Coverage (Calculated)", "Asset Turnover", "Operating Cash Flow / Net Profit"}
+                percent_names = {"ROE", "ROCE", "ROA", "Revenue Growth", "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin", "PBT Margin", "Dividend Yield", "Earnings Yield", "Cash Flow Margin"}
+                currency_names = {"Current Price", "EPS", "Book Value per Share", "Face Value", "Dividend per Share", "52-Week High", "52-Week Low"}
+                multiple_names = {"P/E", "P/B", "Price-to-Sales", "Debt-to-Equity", "Current Ratio", "Interest Coverage", "Asset Turnover", "Operating Cash Flow / Net Profit"}
+                crore_names = {"Market Cap"}
                 ratio_help = {
-                    "Market Cap": "Provider-reported market capitalisation in ₹ crore.",
-                    "Market Cap (Estimated)": "Estimated market capitalisation: current price multiplied by shares inferred from paid-up equity capital divided by face value. Treat as an estimate, not an exchange-confirmed figure.",
-                    "Stock P/E": "Provider-reported stock P/E. It may use trailing-twelve-month earnings and can differ from the annual EPS cross-check.",
-                    "Face Value": "Face value per ordinary share from the latest annual financial statement.",
-                    "Current Price": "Latest available market price per share.",
-                    "P/E": "Provider-reported P/E. It may use trailing-twelve-month earnings and can differ from an annual-statement cross-check.",
-                    "P/E (Annual EPS Cross-check)": "Current price divided by the latest annual financial-statement EPS. This is a cross-check, not necessarily the provider's TTM P/E.",
-                    "P/B": "Provider-reported P/B. Its equity and share-count basis may differ from the annual-statement cross-check.",
-                    "P/B (Annual Book Value Cross-check)": "Current price divided by book value per share calculated from the latest annual statements. Compare only when share-count and equity definitions match.",
+                    "Market Cap": "Calculated as latest TejHQ closing price × estimated shares outstanding. Shares are estimated from paid-up equity capital ÷ face value.",
+                    "Current Price": "Latest TejHQ closing price used in the valuation calculations.",
+                    "Face Value": "Face value per equity share from the annual financial statement.",
+                    "Dividend per Share": "Latest annual dividend per share found in the statement; N/A if not supplied.",
+                    "P/E": "SmartStocks calculation: latest TejHQ closing price ÷ latest annual EPS. Annual EPS basis.",
+                    "P/B": "SmartStocks calculation: latest TejHQ closing price ÷ calculated book value per share.",
                     "Price-to-Sales": "Market value relative to annual revenue. Compare mainly within the same industry.",
-                    "Earnings Yield": "Provider P/E inverse, where available.",
-                    "Earnings Yield (Annual EPS)": "Latest annual EPS divided by current price. This is the inverse of the annual EPS P/E cross-check, not necessarily provider TTM P/E.",
+                    "Earnings Yield": "Earnings per share divided by market price, expressed as a percentage. It is the inverse of P/E when inputs are consistent.",
                     "EPS": "Earnings Per Share: profit attributable to each ordinary share.",
-                    "Book Value per Share": "Annual-statement book value per share calculated from equity attributable to owners and shares inferred from paid-up capital / face value.",
-                    "Book Value per Share (Provider)": "Book value per share supplied directly by the market-ratios provider.",
-                    "Book Value per Share (Calculated)": "Annual-statement book value per share calculated from equity attributable to owners and inferred shares outstanding.",
+                    "Book Value per Share": "Net assets attributable to ordinary shareholders divided by shares outstanding.",
                     "52-Week High": "Highest recorded market price over the last 52 weeks.",
                     "52-Week Low": "Lowest recorded market price over the last 52 weeks.",
-                    "ROE": "Return on Equity: profit relative to shareholders' equity. Higher values can indicate more efficient use of equity.",
-                    "ROE (Calculated)": "Calculated Return on Equity: net profit divided by the relevant equity base. Check period and average-versus-closing equity basis.",
-                    "ROCE": "Return on Capital Employed: operating profit relative to capital employed. Useful for assessing operating efficiency.",
+                    "ROE": "SmartStocks calculation: latest annual net profit attributable to owners ÷ average opening and closing equity.",
+                    "ROCE": "SmartStocks calculation: EBIT (or operating profit if EBIT is absent) ÷ closing capital employed (total assets − current liabilities).",
                     "ROA": "Return on Assets: profit relative to total assets.",
                     "Revenue Growth": "Year-on-year change in revenue. Positive growth means revenue increased versus the prior period.",
                     "EPS Growth": "Year-on-year change in earnings per share. Can be volatile when prior-period EPS is small or negative.",
@@ -361,7 +361,7 @@ if analysis:
                     "Dividend Yield": "Annual dividend per share divided by current share price. The yield can change as the share price moves.",
                     "Debt-to-Equity (Calculated)": "Calculated interest-bearing debt divided by shareholders' equity. Confirm the debt and equity definitions and reporting basis.",
                     "Current Ratio": "Current assets divided by current liabilities. A measure of short-term liquidity.",
-                    "Interest Coverage (Calculated)": "EBIT divided by interest expense. Indicates how many times operating earnings cover interest costs; shown only when inputs are available.",
+                    "Interest Coverage": "SmartStocks calculation: EBIT (or operating profit if EBIT is absent) ÷ interest expense (finance costs only if explicit interest fields are absent).",
                     "Debt Service Coverage (Calculated)": "Cash available for debt service divided by scheduled principal and interest payments. Requires complete, consistently defined inputs.",
                     "Asset Turnover": "Revenue divided by average or reported total assets. Measures how efficiently assets generate sales.",
                     "Operating Cash Flow / Net Profit": "Operating cash flow divided by net profit. Helps compare cash generation with accounting earnings.",
@@ -379,8 +379,6 @@ if analysis:
                         shown = f"{value:,.2f}%" if name in percent_names else (f"₹{value:,.2f} Cr." if name in crore_names else (f"₹{value:,.2f}" if name in currency_names else (f"{value:,.2f}x" if name in multiple_names else f"{value:,.2f}")))
                         help_text = ratio_help.get(name, "Financial metric returned by the data source. Review its definition and reporting period before comparing companies.")
                         cols[i % 3].metric(f"ⓘ {name}", shown, help=help_text)
-                if fdata.get("market_cap_basis") and ratios.get("Market Cap (Estimated)") is not None:
-                    st.caption("Market cap basis: " + str(fdata["market_cap_basis"]) + ". This is an estimate, not an exchange-confirmed market-cap figure.")
                 if not any_metric:
                     st.info("Valuation and ratio data is not available for this company in the current API response.")
             else:
@@ -404,7 +402,7 @@ if analysis:
             )
             if st.button("Compare Selected Companies", key=f"compare_peers_{ticker_loaded}"):
                 if not api_key:
-                    st.error("BHARATSTOCK_API_KEY not found in .env.")
+                    st.error("BHARATSTOCK_API_KEY not found in Streamlit Secrets or local .env.")
                 elif not selected_peer_labels:
                     st.warning("Search for and select at least one peer company.")
                 else:
@@ -565,24 +563,24 @@ if analysis:
                     story += [Spacer(1, 10), Paragraph("Key Ratios & Valuation", styles["Heading2"])]
                     pdf_percent_metrics = {
                         "Revenue Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin",
-                        "PBT Margin", "ROA", "ROE", "ROE (Calculated)", "ROCE", "Dividend Yield",
-                        "Cash Flow Margin", "EPS Growth", "Earnings Yield", "Earnings Yield (Annual EPS)",
+                        "PBT Margin", "ROA", "ROE", "ROCE", "Dividend Yield",
+                        "Cash Flow Margin", "EPS Growth", "Earnings Yield",
                     }
-                    pdf_currency_metrics = {"Current Price", "52-Week High", "52-Week Low", "Book Value per Share", "Book Value per Share (Provider)", "Book Value per Share (Calculated)", "EPS", "Face Value"}
+                    pdf_currency_metrics = {"Current Price", "52-Week High", "52-Week Low", "Book Value per Share", "EPS", "Face Value", "Dividend per Share"}
                     pdf_multiple_metrics = {
-                        "P/E", "Stock P/E", "P/E (Annual EPS Cross-check)", "P/B", "P/B (Annual Book Value Cross-check)", "Debt-to-Equity", "Debt-to-Equity (Reported)", "Debt-to-Equity (Calculated)",
-                        "Current Ratio", "Asset Turnover", "Interest Coverage", "Interest Coverage (Reported)", "Interest Coverage (Calculated)",
-                        "Debt Service Coverage", "Debt Service Coverage (Reported)", "Debt Service Coverage (Calculated)", "Operating Cash Flow / Net Profit", "Price-to-Sales",
+                        "P/E", "P/B", "Debt-to-Equity", "Current Ratio", "Asset Turnover",
+                        "Interest Coverage", "Operating Cash Flow / Net Profit", "Price-to-Sales",
                     }
+                    pdf_crore_metrics = {"Market Cap"}
                     ratio_rows = [["Metric", "Value"]]
                     for k, v in (fdata.get("top_ratios", {}) or {}).items():
                         if isinstance(v, (int, float)):
                             shown_value = f"{v:,.2f}%" if k in pdf_percent_metrics else (
-                                f"₹{v:,.2f} Cr." if k in {"Market Cap", "Market Cap (Estimated)"} else (
-                                f"₹{v:,.2f}" if k in pdf_currency_metrics else (
-                                    f"{v:,.2f}x" if k in pdf_multiple_metrics else f"{v:,.2f}"
+                                f"₹{v:,.2f} Cr." if k in pdf_crore_metrics else (
+                                    f"₹{v:,.2f}" if k in pdf_currency_metrics else (
+                                        f"{v:,.2f}x" if k in pdf_multiple_metrics else f"{v:,.2f}"
+                                    )
                                 )
-                            )
                             )
                         else:
                             shown_value = escape(str(v))
@@ -592,33 +590,18 @@ if analysis:
                         ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
                         ("FONTSIZE", (0, 0), (-1, -1), 8), ("PADDING", (0, 0), (-1, -1), 4),
                     ])))
-                    ratio_context = (
-                        f"Market-cap basis: {escape(str(fdata.get('market_cap_basis') or 'Not supplied'))} · "
-                        f"Financial period: {escape(str(fdata.get('financial_period') or 'Not supplied'))} · "
-                        f"Ratio as-of date: {escape(str(fdata.get('ratio_as_of_date') or 'Not supplied'))} · "
-                        f"Ratio source: {escape(str(fdata.get('ratio_source') or 'Not supplied'))}"
-                    )
-                    story += [Spacer(1, 4), Paragraph(ratio_context, small)]
-                    story.append(Paragraph(
-                        "P/E and P/B annual cross-checks use the latest annual statement EPS/book value per share. "
-                        "Provider-reported market ratios may use TTM earnings, a different equity basis, or a different as-of date; "
-                        "the cross-checks are shown separately and do not overwrite provider values.", small
-                    ))
-                    quality = fdata.get("ratio_quality", {}) or {}
-                    if quality:
-                        quality_rows = [["Ratio", "Status", "Headline / note"]]
-                        for metric, detail in quality.items():
-                            quality_rows.append([
-                                escape(str(metric)),
-                                escape(str(detail.get("status", "—"))),
-                                Paragraph(escape(str(detail.get("message", ""))), small),
-                            ])
-                        story += [Spacer(1, 5), Paragraph("Ratio validation", styles["Heading3"])]
-                        story.append(Table(quality_rows, repeatRows=1, colWidths=[42 * mm, 30 * mm, 150 * mm], style=TableStyle([
+                    notes = fdata.get("ratio_calculation_notes", {}) or {}
+                    if notes:
+                        story += [Spacer(1, 5), Paragraph("Ratio calculation methodology", styles["Heading3"])]
+                        note_rows = [["Metric", "SmartStocks formula / basis"]] + [
+                            [escape(str(metric)), Paragraph(escape(str(method)), small)]
+                            for metric, method in notes.items()
+                        ]
+                        story.append(Table(note_rows, repeatRows=1, colWidths=[48 * mm, 205 * mm], style=TableStyle([
                             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EDF3")),
                             ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
-                            ("FONTSIZE", (0, 0), (-1, -1), 7), ("PADDING", (0, 0), (-1, -1), 4),
-                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("FONTSIZE", (0, 0), (-1, -1), 7), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("PADDING", (0, 0), (-1, -1), 4),
                         ])))
                     for title, key in (("Profit & Loss — Annual", "profit_and_loss"),
                                        ("Balance Sheet — Annual", "balance_sheet"),
@@ -642,7 +625,7 @@ if analysis:
                                 if pd.isna(value):
                                     line.append("—")
                                 elif isinstance(value, (int, float)):
-                                    non_monetary = {"eps", "diluted_eps", "face_value_per_share", "pe_ratio", "debt_equity_ratio", "debt_to_equity_ratio", "interest_service_coverage_ratio", "interest_coverage_ratio", "debt_service_coverage_ratio", "dscr"}
+                                    non_monetary = {"eps", "diluted_eps", "basic_eps", "earnings_per_share", "face_value_per_share", "face_value", "dividend_per_share", "dividend_per_share_amount", "annual_dividend_per_share", "pe_ratio", "pb_ratio", "debt_equity_ratio", "debt_to_equity_ratio", "interest_service_coverage_ratio", "interest_coverage_ratio", "debt_service_coverage_ratio", "dscr"}
                                     line.append(f"{value:,.2f}" if str(view.columns[len(line)]).lower() in non_monetary else f"₹ {value:,.2f} Cr.")
                                 else:
                                     line.append(Paragraph(escape(str(value)), small))
@@ -657,9 +640,9 @@ if analysis:
                         ])))
 
                 story += [Spacer(1, 10), Paragraph(
-                    "Data note: Financial history and ratios reflect the fields returned by BharatStock. "
-                    "Two annual periods are requested, matching the configured BharatStock Free-plan history limit. "
-                    "Calculated ratios are estimates from reported statement values. This report is for educational "
+                    "Data note: BharatStock supplies annual financial statement inputs only. SmartStocks calculates all displayed ratios locally; no BharatStock valuation/ratios endpoint is used. "
+                    "Market price and 52-week range use TejHQ historical closing prices. Market cap and book value per share depend on estimated shares from paid-up capital and face value. "
+                    "Ratios requiring unavailable inputs are omitted rather than inferred. This report is for educational "
                     "purposes and is not investment advice.", small
                 )]
                 document.build(story)

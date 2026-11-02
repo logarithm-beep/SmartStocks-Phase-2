@@ -53,7 +53,8 @@ def rows_to_frame(rows):
 # Keep per-share and ratio fields in their native units when formatting for display.
 STATEMENT_NON_MONETARY_FIELDS = {
     "fiscal_year", "period_end_date", "period_type", "consolidation_type", "statement_format",
-    "eps", "diluted_eps", "face_value_per_share", "pe_ratio", "pb_ratio",
+    "eps", "diluted_eps", "basic_eps", "earnings_per_share", "face_value_per_share", "face_value",
+    "dividend_per_share", "dividend_per_share_amount", "annual_dividend_per_share", "pe_ratio", "pb_ratio",
     "debt_equity_ratio", "debt_to_equity_ratio", "interest_service_coverage_ratio",
     "interest_coverage_ratio", "debt_service_coverage_ratio", "dscr",
     "roe", "roce", "roa", "dividend_yield", "revenue_growth",
@@ -85,7 +86,7 @@ def statement_excel_frame(frame):
     for column in frame.columns:
         key = str(column).strip().lower()
         if key in STATEMENT_NON_MONETARY_FIELDS:
-            if key in {"eps", "diluted_eps", "face_value_per_share"}:
+            if key in {"eps", "diluted_eps", "basic_eps", "earnings_per_share", "face_value_per_share", "face_value", "dividend_per_share", "dividend_per_share_amount", "annual_dividend_per_share"}:
                 renamed[column] = f"{column} (₹/share)"
             elif key not in {"fiscal_year", "period_end_date", "period_type", "consolidation_type", "statement_format"}:
                 renamed[column] = f"{column} (ratio)"
