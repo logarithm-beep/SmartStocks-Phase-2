@@ -420,6 +420,28 @@ def get_fundamental_data(ticker, api_key, force_refresh=False, market_price=None
                 )
                 conn.commit()
     result = _calculate(ticker, payload, market_price=market_price, price_history=price_history)
+    # Keep the raw annual statement response in session state so market-sensitive
+    # ratios can be recalculated on every price refresh without another API call.
+    result["_raw_statement_payload"] = payload
     result["cache_status"] = cache_status
     result["api_calls_for_fetch"] = 1 if cache_status == "MISS" else 0
     return result
+
+
+def recalculate_fundamental_data(fdata, market_price=None, price_history=None):
+    """Recalculate all price-sensitive valuation metrics from cached statements.
+
+    This function makes no network requests. It is safe to call on every
+    Streamlit rerun with the latest available market close.
+    """
+    if not isinstance(fdata, dict) or "_raw_statement_payload" not in fdata:
+        return fdata
+    payload = fdata["_raw_statement_payload"]
+    ticker = fdata.get("symbol", "")
+    refreshed = _calculate(
+        ticker, payload, market_price=market_price, price_history=price_history
+    )
+    refreshed["_raw_statement_payload"] = payload
+    refreshed["cache_status"] = fdata.get("cache_status", "SESSION")
+    refreshed["api_calls_for_fetch"] = 0
+    return refreshed

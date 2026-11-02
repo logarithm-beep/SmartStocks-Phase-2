@@ -206,3 +206,12 @@ Share count is estimated from paid-up equity capital / face value. Metrics requi
 - The dashboard and PDF show the financial period and market-price date. The PDF includes key calculation inputs and methodology notes.
 
 These formulas were tested with synthetic financial statement data. Live BharatStock field mapping and company-specific reported values still require verification against the provider response.
+
+
+## Dynamic market valuation
+
+- Fundamental analysis remains based on the latest completed annual financial statements.
+- The Valuation tab recalculates price-sensitive metrics from the cached annual statements and the latest available TejHQ close on each rerun.
+- Use **Refresh Market Data** to fetch a newer available closing price. This does not call BharatStock again.
+- This is latest-available closing-price data, not an intraday/live quote. Market data availability depends on the TejHQ feed.
+- Annual P/E remains annual EPS-based; TTM P/E is not shown until quarterly statements are integrated.

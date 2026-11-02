@@ -14,8 +14,8 @@ from indicators.bollinger_band import bollinger_band
 from indicators.adx import calculate_adx
 from analysis.recommendation import generate_recommendation, calculate_volume
 from fundamentals.ratio import (
-    get_fundamental_data, get_cache_info, BharatStockRateLimitError,
-    BharatStockDailyBudgetError,
+    get_fundamental_data, recalculate_fundamental_data, get_cache_info,
+    BharatStockRateLimitError, BharatStockDailyBudgetError,
 )
 from fundamentals.helpers import (
     performance_returns, risk_metrics, rows_to_frame, format_statement_frame, statement_excel_frame,
@@ -329,12 +329,55 @@ if analysis:
         fdata = st.session_state.get(f"fundamentals_{ticker_loaded}")
         with valuation:
             st.subheader("Valuation")
+            refresh_market_col, market_status_col = st.columns([1, 2])
+            refresh_market_clicked = refresh_market_col.button(
+                "↻ Refresh Market Data", key=f"refresh_market_{ticker_loaded}",
+                help="Fetch the latest available TejHQ closing price and recalculate valuation ratios. This does not refresh annual statements."
+            )
+            if refresh_market_clicked:
+                try:
+                    with st.spinner("Refreshing latest available market prices..."):
+                        market_df, market_actual_ticker = fetch_stock_data(ticker_loaded, period="1y")
+                        if market_df is None or market_df.empty or "Close" not in market_df.columns:
+                            raise ValueError("No usable market-price history was returned.")
+                        market_df = market_df.dropna(subset=["Close"]).sort_index()
+                        if market_df.empty:
+                            raise ValueError("No valid closing prices were returned.")
+                        for enabled, window in [(show_ma20, 20), (show_ma50, 50), (show_ma100, 100)]:
+                            if enabled or window == 50:
+                                market_df = calculate_ma(market_df, window)
+                        market_df = calculate_rsi(market_df, 14)
+                        market_df = calculate_macd(market_df)
+                        market_df = bollinger_band(market_df)
+                        market_df = calculate_volume(market_df)
+                        market_df = calculate_adx(market_df)
+                        refreshed_analysis = dict(analysis)
+                        refreshed_analysis.update({
+                            "actual_ticker": market_actual_ticker,
+                            "period": "1y",
+                            "df": market_df,
+                            "result": generate_recommendation(market_df),
+                            "risk": risk_metrics(market_df),
+                        })
+                        st.session_state["smartstock_analysis"] = refreshed_analysis
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Market-data refresh failed: {exc}")
+
+            # Recompute valuation ratios from cached annual statements and the
+            # latest available close on every rerun. No BharatStock call occurs.
             if fdata:
+                fdata = recalculate_fundamental_data(
+                    fdata, market_price=current_price, price_history=df
+                )
+                st.session_state[f"fundamentals_{ticker_loaded}"] = fdata
                 ratios = fdata.get("top_ratios", {}) or {}
                 st.caption(
                     f"Financial statements: {fdata.get('financial_period') or 'period unavailable'} "
                     f"(previous period: {fdata.get('previous_financial_period') or 'unavailable'}); "
                     f"market close date: {fdata.get('market_price_date') or 'unavailable'}. "
+                    "Price-sensitive valuation metrics are recalculated on each rerun using the latest available TejHQ close. "
+                    "Use Refresh Market Data to fetch a newer close. This is not an intraday/live quote. "
                     "P/E is annual, not TTM. Market cap is an estimate based on paid-up share capital and face value."
                 )
                 groups = {
@@ -349,7 +392,7 @@ if analysis:
                 crore_names = {"Market Cap (Estimated)"}
                 ratio_help = {
                     "Market Cap (Estimated)": "Latest TejHQ closing price × estimated shares outstanding. Shares are estimated from paid-up/issued equity share capital ÷ face value; authorised capital is not used. Verify against the latest share count.",
-                    "Current Price": "Latest TejHQ closing price used in the valuation calculations.",
+                    "Current Price": "Latest available TejHQ closing price. Price-sensitive valuation ratios are recalculated whenever market data is refreshed; this is not an intraday quote.",
                     "Face Value": "Face value per equity share from the annual financial statement.",
                     "Dividend per Share": "Latest annual dividend per share found in the statement; N/A if not supplied.",
                     "P/E (Annual)": "SmartStocks calculation: latest TejHQ closing price ÷ latest full-year EPS. This is annual P/E, not TTM P/E. Quarterly data is not currently requested, so TTM P/E is not shown.",
@@ -672,7 +715,8 @@ if analysis:
 
                 story += [Spacer(1, 10), Paragraph(
                     "Data note: BharatStock supplies annual financial statement inputs only. SmartStocks calculates all displayed ratios locally; no BharatStock valuation/ratios endpoint is used. "
-                    "Market price and 52-week range use TejHQ historical closing prices. Market cap and book value per share depend on estimated shares from paid-up capital and face value. "
+                    "Market price and 52-week range use the latest available TejHQ historical closing prices. Price-sensitive valuation ratios are recalculated when market data is refreshed; this is not an intraday quote. "
+                    "Market cap and book value per share depend on estimated shares from paid-up capital and face value. "
                     "Ratios requiring unavailable inputs are omitted rather than inferred. This report is for educational "
                     "purposes and is not investment advice.", small
                 )]
