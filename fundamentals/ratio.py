@@ -40,6 +40,10 @@ def _connect():
     conn.execute("""CREATE TABLE IF NOT EXISTS request_log (
         request_day TEXT NOT NULL, requested_at REAL NOT NULL
     )""")
+    # Add an outcome column to existing databases without deleting request history.
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(request_log)")}
+    if "outcome" not in columns:
+        conn.execute("ALTER TABLE request_log ADD COLUMN outcome TEXT NOT NULL DEFAULT 'attempted'")
     conn.commit()
     return conn
 
@@ -53,24 +57,54 @@ def get_cache_info(ticker, api_key):
     key = _key(ticker, api_key)
     with _connect() as conn:
         row = conn.execute("SELECT fetched_at FROM fundamentals WHERE cache_key=?", (key,)).fetchone()
-        count = conn.execute("SELECT COUNT(*) FROM request_log WHERE request_day=?", (date.today().isoformat(),)).fetchone()[0]
+        request_day = date.today().isoformat()
+        attempts = conn.execute(
+            "SELECT COUNT(*) FROM request_log WHERE request_day=?", (request_day,)
+        ).fetchone()[0]
+        successful = conn.execute(
+            "SELECT COUNT(*) FROM request_log WHERE request_day=? AND outcome='success'",
+            (request_day,),
+        ).fetchone()[0]
+        failed = conn.execute(
+            "SELECT COUNT(*) FROM request_log WHERE request_day=? AND outcome NOT IN ('success', 'attempted')",
+            (request_day,),
+        ).fetchone()[0]
+        pending = conn.execute(
+            "SELECT COUNT(*) FROM request_log WHERE request_day=? AND outcome='attempted'",
+            (request_day,),
+        ).fetchone()[0]
     age = max(0, time.time() - row[0]) if row else None
     return {"cached": bool(row), "fresh": bool(row and age <= CACHE_TTL_SECONDS),
             "age_hours": age / 3600 if age is not None else None,
-            "calls_today": count, "daily_limit": DAILY_APP_BUDGET,
-            "calls_remaining": max(0, DAILY_APP_BUDGET - count),
+            "calls_today": attempts, "attempts_today": attempts,
+            "successful_calls_today": successful, "failed_attempts_today": failed,
+            "pending_attempts_today": pending, "daily_limit": DAILY_APP_BUDGET,
+            "calls_remaining": max(0, DAILY_APP_BUDGET - attempts),
             "counter_scope": "This app instance's local SQLite request log only; not provider-wide usage."}
 
 
 def _request_financials(ticker, api_key):
+    request_day = date.today().isoformat()
     with _connect() as conn:
-        used = conn.execute("SELECT COUNT(*) FROM request_log WHERE request_day=?", (date.today().isoformat(),)).fetchone()[0]
+        used = conn.execute(
+            "SELECT COUNT(*) FROM request_log WHERE request_day=?", (request_day,)
+        ).fetchone()[0]
         if used >= DAILY_APP_BUDGET:
             raise BharatStockDailyBudgetError(
                 f"SmartStocks reached its local {DAILY_APP_BUDGET}-request daily safety limit. Cached statements remain available; try again tomorrow."
             )
-        conn.execute("INSERT INTO request_log VALUES (?, ?)", (date.today().isoformat(), time.time()))
+        cursor = conn.execute(
+            "INSERT INTO request_log (request_day, requested_at, outcome) VALUES (?, ?, ?)",
+            (request_day, time.time(), "attempted"),
+        )
+        request_id = cursor.lastrowid
         conn.commit()
+
+    def record_outcome(outcome):
+        with _connect() as conn:
+            conn.execute("UPDATE request_log SET outcome=? WHERE rowid=?", (outcome, request_id))
+            conn.commit()
+
     try:
         response = requests.get(
             f"{BASE_URL}/v1/stocks/{ticker}/financials",
@@ -78,17 +112,26 @@ def _request_financials(ticker, api_key):
             params={"period_type": "annual", "page": 1, "page_size": 5}, timeout=25,
         )
     except requests.RequestException as exc:
+        record_outcome("network_error")
         raise RuntimeError(f"BharatStock network error: {type(exc).__name__}.") from None
+
     if response.status_code == 429:
+        record_outcome("rate_limited")
         raise BharatStockRateLimitError("BharatStock returned HTTP 429 (quota/rate limit). No automatic retry was attempted.")
     if response.status_code in (401, 403):
+        record_outcome("auth_error")
         raise RuntimeError(f"BharatStock authentication/permission error (HTTP {response.status_code}). Check the API key and plan access.")
     if not response.ok:
+        record_outcome("http_error")
         raise RuntimeError(f"BharatStock returned HTTP {response.status_code} for the annual financial statements endpoint.")
     try:
-        return response.json()
+        payload = response.json()
     except ValueError:
+        record_outcome("invalid_json")
         raise RuntimeError("BharatStock returned invalid JSON.") from None
+
+    record_outcome("success")
+    return payload
 
 
 def _rows(payload):

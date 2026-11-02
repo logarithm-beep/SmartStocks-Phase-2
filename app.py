@@ -293,13 +293,16 @@ if analysis:
                     "Older local cache available" if cache_info["cached"] else "No local cache yet"
                 )
                 st.caption(
-                    f"BharatStock cache: {cache_label} · SmartStocks tracked requests on this app instance: "
-                    f"{cache_info['calls_today']} today"
+                    f"BharatStock cache: {cache_label} · API attempts on this app instance: "
+                    f"{cache_info['attempts_today']} today · "
+                    f"Successful: {cache_info['successful_calls_today']} · "
+                    f"Failed: {cache_info['failed_attempts_today']}"
                 )
                 st.caption(
-                    "This is a local per-instance counter, not BharatStock's account-wide quota. "
-                    "Other users, app instances, deployments, or scripts using the same API key can consume quota "
-                    "without appearing in this counter. Check BharatStock's dashboard for the authoritative usage."
+                    "The daily safety limit counts all outbound attempts, including failed requests, because "
+                    "the provider may still count them toward quota. Successful and failed attempts are shown "
+                    "separately. This is a local per-instance counter, not BharatStock's account-wide quota; "
+                    "check BharatStock's dashboard for authoritative usage."
                 )
             load_col, refresh_col = st.columns(2)
             load_clicked = load_col.button("Load Fundamental Data", key=f"load_fundamentals_{ticker_loaded}")
