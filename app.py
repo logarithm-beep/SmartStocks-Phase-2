@@ -445,6 +445,7 @@ if analysis:
             peer_universe = stocks.copy()
             peer_universe = peer_universe[peer_universe["SYMBOL"].ne(ticker_loaded)]
             peer_universe = peer_universe[peer_universe["EXCHANGE"].str.upper().eq("NSE")]
+            peer_universe = peer_universe.drop_duplicates(subset=["SYMBOL"], keep="first")
             peer_universe["PEER_LABEL"] = peer_universe.apply(
                 lambda r: f"{r['NAME OF COMPANY']} ({r['SYMBOL']})", axis=1
             )
@@ -467,49 +468,79 @@ if analysis:
                     company_names.setdefault(ticker_loaded, ticker_loaded)
                     rows = []
                     progress = st.progress(0)
+                    peer_errors = []
                     # Keep the comparison table focused on the requested metrics.
                     ratio_columns = [
                         "Face Value", "EPS", "Book Value per Share", "PBT Margin",
                         "P/E (Annual)", "P/B", "ROE", "ROCE", "ROA",
                     ]
+
+                    def _latest_close(frame):
+                        if frame is None or getattr(frame, "empty", True):
+                            return None
+                        close_col = next((c for c in ("Close", "close", "CLOSE", "Adj Close") if c in frame.columns), None)
+                        if close_col is None:
+                            return None
+                        values = pd.to_numeric(frame[close_col], errors="coerce").dropna()
+                        return float(values.iloc[-1]) if not values.empty else None
+
                     for index, peer in enumerate(symbols, start=1):
                         company_label = f"{company_names.get(peer, peer)} ({peer})"
                         row = {"Company": company_label, "Share Price": None}
-                        peer_price = None
                         peer_prices = None
-                        try:
-                            # Latest available TejHQ daily close.
-                            try:
-                                peer_prices, _ = fetch_stock_data(peer, period="1y")
-                                if peer_prices is not None and not peer_prices.empty and "Close" in peer_prices.columns:
-                                    clean_prices = peer_prices.dropna(subset=["Close"]).sort_index()
-                                    if not clean_prices.empty:
-                                        peer_price = float(clean_prices["Close"].iloc[-1])
-                            except Exception:
-                                # Keep financial comparison available even if price lookup fails.
-                                peer_prices = None
+                        peer_price = None
 
+                        # Fetch market price independently; do not silently discard
+                        # provider errors because that made every price appear as N/A.
+                        try:
+                            peer_prices, _ = fetch_stock_data(peer, period="1y")
+                            peer_price = _latest_close(peer_prices)
+                            if peer_price is None:
+                                peer_errors.append(f"{peer}: market feed returned no usable closing price.")
+                        except Exception as exc:
+                            peer_errors.append(f"{peer}: market price lookup failed ({type(exc).__name__}: {exc}).")
+
+                        # For the currently loaded company, reuse the chart dataframe
+                        # if the separate peer lookup did not return a close.
+                        if peer_price is None and peer == ticker_loaded:
+                            try:
+                                peer_price = _latest_close(df)
+                                if peer_price is not None:
+                                    peer_prices = df
+                            except Exception:
+                                pass
+                        row["Share Price"] = peer_price
+
+                        try:
                             peer_data = get_fundamental_data(
                                 peer, api_key, market_price=peer_price, price_history=peer_prices
                             )
                             ratios = peer_data.get("top_ratios") or {}
                             for column in ratio_columns:
                                 row[column] = ratios.get(column)
+                            if not ratios:
+                                peer_errors.append(f"{peer}: BharatStock returned financial statements but no calculated ratios.")
                         except (BharatStockDailyBudgetError, BharatStockRateLimitError) as exc:
+                            peer_errors.append(f"{peer}: {exc}")
                             for column in ratio_columns:
-                                row.setdefault(column, None)
+                                row[column] = None
                             rows.append(row)
                             if isinstance(exc, BharatStockDailyBudgetError):
                                 remaining = {"Company": "Remaining peers", "Share Price": None}
                                 remaining.update({column: None for column in ratio_columns})
                                 rows.append(remaining)
                                 break
-                        except Exception:
+                        except Exception as exc:
+                            peer_errors.append(f"{peer}: financial data lookup/calculation failed ({type(exc).__name__}: {exc}).")
                             for column in ratio_columns:
-                                row.setdefault(column, None)
+                                row[column] = None
                         rows.append(row)
                         progress.progress(index / len(symbols))
 
+                    if peer_errors:
+                        with st.expander("Peer data diagnostics", expanded=True):
+                            for message in peer_errors:
+                                st.warning(message)
                     peer_frame = pd.DataFrame(rows)
                     # Share Price follows Company. Display units explicitly so
                     # percentages and valuation multiples cannot be confused.

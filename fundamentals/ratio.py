@@ -222,7 +222,7 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
     finance_cost = _first_non_none(_num(latest, "interest_expense"), _num(latest, "interest_on_borrowings"), _num(latest, "interest_cost"), _num(latest, "finance_costs"))
 
     debt_parts = [_num(latest, "borrowings_current"), _num(latest, "borrowings_non_current")]
-    debt = sum(v for v in debt_parts if v is not None) if any(v is not None for v in debt_parts) else _first_non_none(
+    debt = sum((v if v is not None else 0) for v in debt_parts) if any(v is not None for v in debt_parts) else _first_non_none(
         _num(latest, "total_borrowings"), _num(latest, "total_debt"), _num(latest, "gross_debt"), _num(latest, "borrowings")
     )
     if debt is None:
