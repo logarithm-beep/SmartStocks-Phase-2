@@ -467,23 +467,80 @@ if analysis:
                     company_names.setdefault(ticker_loaded, ticker_loaded)
                     rows = []
                     progress = st.progress(0)
+                    # Keep the comparison schema consistent even when a provider
+                    # does not return every metric for a particular company.
+                    ratio_columns = [
+                        "Face Value", "EPS", "Book Value per Share", "Revenue Growth",
+                        "EPS Growth", "Net Profit Margin", "Operating Margin",
+                        "EBITDA Margin", "PBT Margin", "P/E (Annual)", "P/B",
+                        "ROE", "ROCE", "ROA",
+                    ]
                     for index, peer in enumerate(symbols, start=1):
+                        company_label = f"{company_names.get(peer, peer)} ({peer})"
+                        row = {"Company": company_label, "Share Price": "N/A", "Data Status": "OK"}
                         try:
-                            peer_data = get_fundamental_data(peer, api_key)
-                            row = {"Company": f"{company_names.get(peer, peer)} ({peer})"}
-                            row.update(peer_data.get("top_ratios", {}) or {})
-                            rows.append(row)
+                            # Price is sourced from the existing TejHQ NSE OHLCV
+                            # integration; use the latest available daily close.
+                            try:
+                                peer_prices, _ = fetch_stock_data(peer, period="1y")
+                                if peer_prices is not None and not peer_prices.empty and "Close" in peer_prices.columns:
+                                    peer_prices = peer_prices.dropna(subset=["Close"]).sort_index()
+                                    if not peer_prices.empty:
+                                        peer_price = float(peer_prices["Close"].iloc[-1])
+                                        row["Share Price"] = f"₹{peer_price:,.2f}"
+                                else:
+                                    peer_prices = None
+                                    row["Data Status"] = "Financial data loaded; share price unavailable"
+                            except Exception as price_exc:
+                                peer_prices = None
+                                row["Data Status"] = f"Share price unavailable: {price_exc}"
+                                peer_price = None
+                            else:
+                                peer_price = (
+                                    float(peer_prices["Close"].dropna().iloc[-1])
+                                    if peer_prices is not None and not peer_prices.empty
+                                    and "Close" in peer_prices.columns and peer_prices["Close"].notna().any()
+                                    else None
+                                )
+
+                            peer_data = get_fundamental_data(
+                                peer, api_key, market_price=peer_price, price_history=peer_prices
+                            )
+                            ratios = peer_data.get("top_ratios") or {}
+                            for column in ratio_columns:
+                                value = ratios.get(column)
+                                row[column] = value if value is not None else "N/A"
+                            if not ratios or not any(value is not None for value in ratios.values()):
+                                row["Data Status"] = "No usable annual financial metrics returned by BharatStock"
                         except (BharatStockDailyBudgetError, BharatStockRateLimitError) as exc:
-                            rows.append({"Company": peer, "Status": str(exc)})
+                            row["Data Status"] = str(exc)
+                            for column in ratio_columns:
+                                row.setdefault(column, "N/A")
+                            rows.append(row)
                             if isinstance(exc, BharatStockDailyBudgetError):
-                                rows.append({"Company": "Remaining peers", "Status": "Not fetched to protect the daily API quota."})
+                                remaining = {"Company": "Remaining peers", "Share Price": "N/A",
+                                             "Data Status": "Not fetched to protect the daily API quota."}
+                                remaining.update({column: "N/A" for column in ratio_columns})
+                                rows.append(remaining)
                                 break
                         except Exception as exc:
-                            rows.append({"Company": peer, "Status": str(exc)})
+                            row["Data Status"] = f"Financial data unavailable: {exc}"
+                            for column in ratio_columns:
+                                row.setdefault(column, "N/A")
+                        rows.append(row)
                         progress.progress(index / len(symbols))
                     st.session_state[f"peers_{ticker_loaded}"] = pd.DataFrame(rows)
             peer_frame = st.session_state.get(f"peers_{ticker_loaded}")
             if peer_frame is not None:
+                # Share Price is intentionally the first column.
+                preferred_columns = ["Share Price", "Company", "Data Status"]
+                preferred_columns += [c for c in [
+                    "Face Value", "EPS", "Book Value per Share", "Revenue Growth",
+                    "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin",
+                    "PBT Margin", "P/E (Annual)", "P/B", "ROE", "ROCE", "ROA",
+                ] if c in peer_frame.columns]
+                remaining_columns = [c for c in peer_frame.columns if c not in preferred_columns]
+                peer_frame = peer_frame.reindex(columns=preferred_columns + remaining_columns)
                 st.dataframe(peer_frame, use_container_width=True, hide_index=True)
 
         with reports:
