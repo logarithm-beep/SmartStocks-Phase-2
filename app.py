@@ -257,7 +257,18 @@ if analysis:
             st.caption("Maximum drawdown is the largest peak-to-trough decline in the selected history.")
 
         load_dotenv()
-        api_key = st.secrets.get("BHARATSTOCK_API_KEY", os.getenv("BHARATSTOCK_API_KEY", ""))
+        # Streamlit parses secrets.toml on access. A malformed local secrets file
+        # must not prevent a valid .env key from being used.
+        try:
+            api_key = st.secrets.get("BHARATSTOCK_API_KEY", "")
+        except Exception as secrets_error:
+            api_key = ""
+            st.warning(
+                "Could not read .streamlit/secrets.toml. Check that it contains valid TOML; "
+                "trying the local .env file instead."
+            )
+        if not api_key:
+            api_key = os.getenv("BHARATSTOCK_API_KEY", "")
 
         with fundamentals:
             st.subheader("Fundamental Analysis")

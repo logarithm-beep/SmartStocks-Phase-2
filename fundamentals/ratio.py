@@ -161,8 +161,8 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
     # API statement amounts are INR. Convert once to ₹ crore.
     for row in rows:
         for field in monetary_fields:
-            value = row.get(field)
-            if isinstance(value, (int, float)):
+            value = _num(row, field)
+            if value is not None:
                 row[field] = value / STATEMENT_AMOUNT_DIVISOR
 
     latest = rows[0]
