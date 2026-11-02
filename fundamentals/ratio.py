@@ -16,7 +16,7 @@ import requests
 BASE_URL = "https://bharatstockapi.com"
 CACHE_TTL_SECONDS = 24 * 60 * 60
 STATEMENT_AMOUNT_DIVISOR = 10_000_000
-DATA_SCHEMA_VERSION = 6
+DATA_SCHEMA_VERSION = 7
 DAILY_APP_BUDGET = 55
 CACHE_DIR = Path(".smartstock_cache")
 DB_PATH = CACHE_DIR / "bharatstock_cache.sqlite"
@@ -106,15 +106,24 @@ def _rows(payload):
     return []
 
 
+def _normal_key(value):
+    return "".join(ch for ch in str(value).lower() if ch.isalnum())
+
+
 def _num(row, *keys):
+    """Read numeric statement fields with tolerant key-name matching."""
     if not isinstance(row, dict):
         return None
+    normalized = {_normal_key(k): v for k, v in row.items()}
     for key in keys:
         value = row.get(key)
+        if value is None:
+            value = normalized.get(_normal_key(key))
         if value is None or value == "":
             continue
         try:
-            return float(str(value).replace(",", "").replace("₹", "").strip())
+            cleaned = str(value).replace(",", "").replace("₹", "").replace("%", "").strip()
+            return float(cleaned)
         except (TypeError, ValueError):
             continue
     return None
@@ -151,7 +160,12 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
         "paid_up_equity_capital", "other_equity", "goodwill", "property_plant_equipment", "total_borrowings",
         "total_debt", "gross_debt", "short_term_borrowings", "long_term_borrowings", "borrowings",
         "equity_attributable_to_owners", "provisions_current", "current_investments",
-        "paid_up_capital", "share_capital", "equity_share_capital",
+        "paid_up_capital", "share_capital", "equity_share_capital", "paid_up_share_capital",
+        "issued_subscribed_and_paid_up_share_capital", "equity_attributable_to_owners_of_parent",
+        "total_equity_attributable_to_owners_of_parent", "shareholders_equity_attributable_to_parent",
+        "equity_attributable_to_parent", "parent_shareholders_equity", "owners_equity",
+        "non_controlling_interests", "non_controlling_interest", "minority_interest", "minority_interests",
+        "equity_attributable_to_non_controlling_interests", "total_shareholders_equity", "total_stockholders_equity",
     }
     cash_fields = {"cash_flow_operating", "cash_flow_investing", "cash_flow_financing", "net_change_in_cash", "capex"}
     meta_fields = ("fiscal_year", "period_end_date", "period_type", "consolidation_type", "statement_format")
@@ -161,9 +175,12 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
     # API statement amounts are INR. Convert once to ₹ crore.
     for row in rows:
         for field in monetary_fields:
-            value = _num(row, field)
-            if value is not None:
-                row[field] = value / STATEMENT_AMOUNT_DIVISOR
+            value = row.get(field)
+            if value is not None and value != "":
+                try:
+                    row[field] = float(str(value).replace(",", "").replace("₹", "").strip()) / STATEMENT_AMOUNT_DIVISOR
+                except (TypeError, ValueError):
+                    pass
 
     latest = rows[0]
     previous = rows[1] if len(rows) > 1 else {}
@@ -175,8 +192,28 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
     pbt = _num(latest, "profit_before_tax")
     total_assets = _num(latest, "total_assets")
     prior_assets = _num(previous, "total_assets")
-    equity = _first_non_none(_num(latest, "equity_attributable_to_owners"), _num(latest, "total_equity"))
-    prior_equity = _first_non_none(_num(previous, "equity_attributable_to_owners"), _num(previous, "total_equity"))
+    # Consolidated common-equity basis: use equity attributable to owners of
+    # the parent. If only total equity is supplied, subtract NCI explicitly;
+    # never silently include minority interests in parent-shareholder BVPS.
+    owner_equity_aliases = (
+        "equity_attributable_to_owners", "equity_attributable_to_owners_of_parent",
+        "total_equity_attributable_to_owners_of_parent", "shareholders_equity_attributable_to_parent",
+        "equity_attributable_to_parent", "parent_shareholders_equity", "owners_equity",
+    )
+    nci_aliases = ("non_controlling_interests", "non_controlling_interest", "minority_interest",
+                   "minority_interests", "equity_attributable_to_non_controlling_interests")
+    owner_equity = _first_non_none(*[_num(latest, k) for k in owner_equity_aliases])
+    prior_owner_equity = _first_non_none(*[_num(previous, k) for k in owner_equity_aliases])
+    total_equity_latest = _num(latest, "total_equity", "total_shareholders_equity", "total_stockholders_equity")
+    total_equity_previous = _num(previous, "total_equity", "total_shareholders_equity", "total_stockholders_equity")
+    nci_latest = _first_non_none(*[_num(latest, k) for k in nci_aliases])
+    nci_previous = _first_non_none(*[_num(previous, k) for k in nci_aliases])
+    if owner_equity is None and total_equity_latest is not None and nci_latest is not None:
+        owner_equity = total_equity_latest - nci_latest
+    if prior_owner_equity is None and total_equity_previous is not None and nci_previous is not None:
+        prior_owner_equity = total_equity_previous - nci_previous
+    equity = owner_equity
+    prior_equity = prior_owner_equity
     current_assets = _num(latest, "current_assets")
     current_liabilities = _num(latest, "current_liabilities")
     finance_cost = _first_non_none(_num(latest, "interest_expense"), _num(latest, "interest_on_borrowings"), _num(latest, "interest_cost"), _num(latest, "finance_costs"))
@@ -198,8 +235,13 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
     elif equity is not None and debt is not None:
         capital_employed = equity + debt
 
-    paid_up_capital = _first_non_none(_num(latest, "paid_up_equity_capital"), _num(latest, "paid_up_capital"), _num(latest, "share_capital"), _num(latest, "equity_share_capital"))
-    face_value = _first_non_none(_num(latest, "face_value_per_share"), _num(latest, "face_value"))
+    paid_up_capital = _first_non_none(*[_num(latest, k) for k in (
+        "paid_up_equity_capital", "paid_up_share_capital", "paid_up_capital",
+        "share_capital", "equity_share_capital", "issued_subscribed_and_paid_up_share_capital"
+    )])
+    face_value = _first_non_none(*[_num(latest, k) for k in (
+        "face_value_per_share", "face_value", "equity_share_face_value"
+    )])
     shares_crore = paid_up_capital / face_value if paid_up_capital is not None and face_value not in (None, 0) else None
     # ₹ crore / crore shares = ₹ per share.
     book_value_per_share = _safe_ratio(equity, shares_crore) if shares_crore else None
@@ -274,7 +316,7 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
     calculation_notes = {
         "P/E": "Latest TejHQ closing price ÷ latest annual EPS. Annual EPS basis; not TTM unless the statement is TTM.",
         "P/B": "Latest TejHQ closing price ÷ calculated book value per share.",
-        "Book Value per Share": "Equity attributable to owners ÷ estimated shares outstanding; shares estimated from paid-up equity capital ÷ face value.",
+        "Book Value per Share": "Consolidated equity attributable to owners of the parent ÷ estimated ordinary shares outstanding. Shares are estimated from paid-up equity share capital ÷ face value. Non-controlling interests are excluded; if parent equity cannot be isolated, BVPS and P/B are N/A.",
         "Market Cap": "Latest TejHQ closing price × estimated shares outstanding; ₹ crore.",
         "ROE": "Latest annual net profit attributable to owners ÷ average opening/closing equity. Requires two annual balance sheets.",
         "ROA": "Latest annual net profit ÷ average opening/closing total assets. Requires two annual balance sheets.",
@@ -303,7 +345,9 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
             "revenue": revenue, "prior_revenue": prior_revenue, "net_profit": net_profit,
             "operating_profit_or_ebit": operating_profit, "ebitda": ebitda,
             "total_assets": total_assets, "prior_total_assets": prior_assets,
-            "equity": equity, "prior_equity": prior_equity, "debt": debt,
+            "equity": equity, "prior_equity": prior_equity, "total_equity_latest": total_equity_latest,
+            "non_controlling_interests_latest": nci_latest, "equity_basis": "parent owners equity" if owner_equity is not None else "unavailable",
+            "debt": debt,
             "paid_up_equity_capital": paid_up_capital, "face_value": face_value,
             "estimated_shares_crore": shares_crore, "eps": eps,
             "dividend_per_share": dividend_per_share, "market_price": price,

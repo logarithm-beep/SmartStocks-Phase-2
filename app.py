@@ -257,16 +257,10 @@ if analysis:
             st.caption("Maximum drawdown is the largest peak-to-trough decline in the selected history.")
 
         load_dotenv()
-        # Streamlit parses secrets.toml on access. A malformed local secrets file
-        # must not prevent a valid .env key from being used.
         try:
             api_key = st.secrets.get("BHARATSTOCK_API_KEY", "")
-        except Exception as secrets_error:
+        except Exception:
             api_key = ""
-            st.warning(
-                "Could not read .streamlit/secrets.toml. Check that it contains valid TOML; "
-                "trying the local .env file instead."
-            )
         if not api_key:
             api_key = os.getenv("BHARATSTOCK_API_KEY", "")
 
@@ -353,7 +347,7 @@ if analysis:
                     "Face Value": "Face value per equity share from the annual financial statement.",
                     "Dividend per Share": "Latest annual dividend per share found in the statement; N/A if not supplied.",
                     "P/E": "SmartStocks calculation: latest TejHQ closing price ÷ latest annual EPS. Annual EPS basis.",
-                    "P/B": "SmartStocks calculation: latest TejHQ closing price ÷ calculated book value per share.",
+                    "P/B": "SmartStocks calculation: latest TejHQ closing price ÷ book value per share attributable to parent ordinary shareholders. Consolidated non-controlling interests are excluded; P/B is unavailable if parent equity cannot be isolated.",
                     "Price-to-Sales": "Market value relative to annual revenue. Compare mainly within the same industry.",
                     "Earnings Yield": "Earnings per share divided by market price, expressed as a percentage. It is the inverse of P/E when inputs are consistent.",
                     "EPS": "Earnings Per Share: profit attributable to each ordinary share.",
