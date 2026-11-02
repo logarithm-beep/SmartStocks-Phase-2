@@ -58,7 +58,8 @@ def get_cache_info(ticker, api_key):
     return {"cached": bool(row), "fresh": bool(row and age <= CACHE_TTL_SECONDS),
             "age_hours": age / 3600 if age is not None else None,
             "calls_today": count, "daily_limit": DAILY_APP_BUDGET,
-            "calls_remaining": max(0, DAILY_APP_BUDGET - count)}
+            "calls_remaining": max(0, DAILY_APP_BUDGET - count),
+            "counter_scope": "This app instance's local SQLite request log only; not provider-wide usage."}
 
 
 def _request_financials(ticker, api_key):

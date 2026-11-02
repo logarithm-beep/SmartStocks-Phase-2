@@ -214,3 +214,10 @@ These formulas were tested with synthetic financial statement data. Live BharatS
 
 The dashboard uses a stateful section selector rather than `st.tabs()`, so Streamlit reruns (including **Load Fundamental Data**) keep the user on the selected section. Fundamental statements are fetched using the ticker of the currently loaded analysis, which must match the stock selected in the search control. If a different stock is selected, click **Fetch Data** for that stock first, then open **Fundamentals** and click **Load Fundamental Data**.
 
+
+
+## BharatStock request-counter limitation
+
+The Fundamentals page's request count is a **local per-app-instance diagnostic**, stored in the app's SQLite cache directory. It is not BharatStock's account-wide quota meter. On Streamlit Cloud, local files may be ephemeral and multiple app instances or users can have separate local logs. Any other app, script, deployment, or user sharing the same BharatStock API key can also consume the provider quota without appearing in this counter.
+
+Use the BharatStock account dashboard as the authoritative source for actual API quota consumption. SmartStocks increments its local request log before sending its annual-financials HTTP request, so it includes attempted requests made by this code path, including failed HTTP responses. It cannot count requests made outside this app instance.

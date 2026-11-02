@@ -280,8 +280,13 @@ if analysis:
                     "Older local cache available" if cache_info["cached"] else "No local cache yet"
                 )
                 st.caption(
-                    f"BharatStock cache: {cache_label} · SmartStock API calls today: "
-                    f"{cache_info['calls_today']}/{cache_info['daily_limit']} calls today · {cache_info['calls_remaining']} remaining"
+                    f"BharatStock cache: {cache_label} · SmartStocks tracked requests on this app instance: "
+                    f"{cache_info['calls_today']} today"
+                )
+                st.caption(
+                    "This is a local per-instance counter, not BharatStock's account-wide quota. "
+                    "Other users, app instances, deployments, or scripts using the same API key can consume quota "
+                    "without appearing in this counter. Check BharatStock's dashboard for the authoritative usage."
                 )
             load_col, refresh_col = st.columns(2)
             load_clicked = load_col.button("Load Fundamental Data", key=f"load_fundamentals_{ticker_loaded}")
