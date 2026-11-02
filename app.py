@@ -331,22 +331,28 @@ if analysis:
             st.subheader("Valuation")
             if fdata:
                 ratios = fdata.get("top_ratios", {}) or {}
+                st.caption(
+                    f"Financial statements: {fdata.get('financial_period') or 'period unavailable'} "
+                    f"(previous period: {fdata.get('previous_financial_period') or 'unavailable'}); "
+                    f"market close date: {fdata.get('market_price_date') or 'unavailable'}. "
+                    "P/E is annual, not TTM. Market cap is an estimate based on paid-up share capital and face value."
+                )
                 groups = {
-                    "Market & valuation": ["Market Cap", "Current Price", "P/E", "P/B", "Price-to-Sales", "Earnings Yield", "EPS", "Book Value per Share", "Face Value", "52-Week High", "52-Week Low"],
+                    "Market & valuation": ["Market Cap (Estimated)", "Current Price", "P/E (Annual)", "P/B", "Price-to-Sales", "Earnings Yield", "EPS", "Book Value per Share", "Face Value", "52-Week High", "52-Week Low"],
                     "Profitability & returns": ["ROE", "ROCE", "ROA", "Revenue Growth", "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin", "PBT Margin", "Dividend per Share", "Dividend Yield"],
                     "Debt & liquidity": ["Debt-to-Equity", "Current Ratio", "Interest Coverage"],
                     "Efficiency & cash flow": ["Asset Turnover", "Operating Cash Flow / Net Profit", "Cash Flow Margin"],
                 }
                 percent_names = {"ROE", "ROCE", "ROA", "Revenue Growth", "EPS Growth", "Net Profit Margin", "Operating Margin", "EBITDA Margin", "PBT Margin", "Dividend Yield", "Earnings Yield", "Cash Flow Margin"}
                 currency_names = {"Current Price", "EPS", "Book Value per Share", "Face Value", "Dividend per Share", "52-Week High", "52-Week Low"}
-                multiple_names = {"P/E", "P/B", "Price-to-Sales", "Debt-to-Equity", "Current Ratio", "Interest Coverage", "Asset Turnover", "Operating Cash Flow / Net Profit"}
-                crore_names = {"Market Cap"}
+                multiple_names = {"P/E (Annual)", "P/B", "Price-to-Sales", "Debt-to-Equity", "Current Ratio", "Interest Coverage", "Asset Turnover", "Operating Cash Flow / Net Profit"}
+                crore_names = {"Market Cap (Estimated)"}
                 ratio_help = {
-                    "Market Cap": "Calculated as latest TejHQ closing price × estimated shares outstanding. Shares are estimated from paid-up equity capital ÷ face value.",
+                    "Market Cap (Estimated)": "Latest TejHQ closing price × estimated shares outstanding. Shares are estimated from paid-up/issued equity share capital ÷ face value; authorised capital is not used. Verify against the latest share count.",
                     "Current Price": "Latest TejHQ closing price used in the valuation calculations.",
                     "Face Value": "Face value per equity share from the annual financial statement.",
                     "Dividend per Share": "Latest annual dividend per share found in the statement; N/A if not supplied.",
-                    "P/E": "SmartStocks calculation: latest TejHQ closing price ÷ latest annual EPS. Annual EPS basis.",
+                    "P/E (Annual)": "SmartStocks calculation: latest TejHQ closing price ÷ latest full-year EPS. This is annual P/E, not TTM P/E. Quarterly data is not currently requested, so TTM P/E is not shown.",
                     "P/B": "SmartStocks calculation: latest TejHQ closing price ÷ book value per share attributable to parent ordinary shareholders. Consolidated non-controlling interests are excluded; P/B is unavailable if parent equity cannot be isolated.",
                     "Price-to-Sales": "Market value relative to annual revenue. Compare mainly within the same industry.",
                     "Earnings Yield": "Earnings per share divided by market price, expressed as a percentage. It is the inverse of P/E when inputs are consistent.",
@@ -354,8 +360,9 @@ if analysis:
                     "Book Value per Share": "Net assets attributable to ordinary shareholders divided by shares outstanding.",
                     "52-Week High": "Highest recorded market price over the last 52 weeks.",
                     "52-Week Low": "Lowest recorded market price over the last 52 weeks.",
-                    "ROE": "SmartStocks calculation: latest annual net profit attributable to owners ÷ average opening and closing equity.",
-                    "ROCE": "SmartStocks calculation: EBIT (or operating profit if EBIT is absent) ÷ closing capital employed (total assets − current liabilities).",
+                    "ROE": "Annual profit attributable to owners of the parent ÷ average opening and closing parent-attributable equity.",
+                    "ROCE": "EBIT (or operating profit if EBIT is absent) ÷ average opening and closing capital employed. Capital employed = total assets − current liabilities.",
+                    "ROA": "Consolidated profit for the period ÷ average opening and closing consolidated total assets.",
                     "ROA": "Return on Assets: profit relative to total assets.",
                     "Revenue Growth": "Year-on-year change in revenue. Positive growth means revenue increased versus the prior period.",
                     "EPS Growth": "Year-on-year change in earnings per share. Can be volatile when prior-period EPS is small or negative.",
@@ -573,10 +580,10 @@ if analysis:
                     }
                     pdf_currency_metrics = {"Current Price", "52-Week High", "52-Week Low", "Book Value per Share", "EPS", "Face Value", "Dividend per Share"}
                     pdf_multiple_metrics = {
-                        "P/E", "P/B", "Debt-to-Equity", "Current Ratio", "Asset Turnover",
+                        "P/E (Annual)", "P/B", "Debt-to-Equity", "Current Ratio", "Asset Turnover",
                         "Interest Coverage", "Operating Cash Flow / Net Profit", "Price-to-Sales",
                     }
-                    pdf_crore_metrics = {"Market Cap"}
+                    pdf_crore_metrics = {"Market Cap (Estimated)"}
                     ratio_rows = [["Metric", "Value"]]
                     for k, v in (fdata.get("top_ratios", {}) or {}).items():
                         if isinstance(v, (int, float)):
@@ -608,6 +615,23 @@ if analysis:
                             ("FONTSIZE", (0, 0), (-1, -1), 7), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                             ("PADDING", (0, 0), (-1, -1), 4),
                         ])))
+                    input_values = fdata.get("ratio_input_values", {}) or {}
+                    if input_values:
+                        story += [Spacer(1, 5), Paragraph("Key calculation inputs", styles["Heading3"])]
+                        input_rows = [["Input", "Value"]]
+                        for input_name, input_value in input_values.items():
+                            if input_value is None:
+                                display_input = "N/A"
+                            elif isinstance(input_value, (int, float)):
+                                display_input = f"{input_value:,.4f}"
+                            else:
+                                display_input = str(input_value)
+                            input_rows.append([escape(str(input_name).replace("_", " ").title()), escape(display_input)])
+                        story.append(Table(input_rows, repeatRows=1, colWidths=[75 * mm, 45 * mm], style=TableStyle([
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EDF3")),
+                            ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
+                            ("FONTSIZE", (0, 0), (-1, -1), 7), ("PADDING", (0, 0), (-1, -1), 3),
+                        ])))
                     for title, key in (("Profit & Loss — Annual", "profit_and_loss"),
                                        ("Balance Sheet — Annual", "balance_sheet"),
                                        ("Cash Flow — Annual", "cash_flow")):
@@ -618,7 +642,9 @@ if analysis:
                         # Keep the PDF readable by limiting very wide statements to key columns.
                         preferred = [c for c in [
                             "fiscal_year", "revenue", "total_income", "operating_profit", "ebitda",
-                            "profit_before_tax", "net_profit", "eps", "total_assets", "total_equity",
+                            "profit_before_tax", "net_profit", "net_profit_attributable_to_owners", "eps",
+                            "total_assets", "total_equity", "equity_attributable_to_owners_of_parent",
+                            "non_controlling_interests", "paid_up_equity_capital", "face_value",
                             "total_liabilities", "current_assets", "current_liabilities",
                             "cash_flow_operating", "cash_flow_investing", "cash_flow_financing", "capex",
                         ] if c in frame.columns]

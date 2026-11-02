@@ -193,3 +193,16 @@ SmartStocks requests annual financial statements from BharatStock only. It does 
 - Dividend yield = annual dividend per share / latest TejHQ close; omitted when dividend-per-share input is unavailable.
 
 Share count is estimated from paid-up equity capital / face value. Metrics requiring missing inputs are omitted. The 52-week high/low is shown only when the fetched price history covers approximately one year. The dashboard includes a statement refresh control to bypass the 24-hour local statement cache.
+
+## Ratio methodology update (Phase 2 audit)
+
+- Market Cap is labelled **Estimated** and uses the latest TejHQ close multiplied by shares estimated from paid-up/issued equity share capital divided by face value. Authorised capital is not used. Reconcile this estimate with the issuer's latest outstanding share count before relying on it.
+- P/E is explicitly labelled **P/E (Annual)** and uses the latest full-year EPS. TTM P/E is not displayed because this integration currently requests annual statements only; it does not fabricate quarterly EPS.
+- P/B uses parent-attributable consolidated equity, excluding non-controlling interests, divided by estimated ordinary shares. If parent equity cannot be isolated, P/B is unavailable.
+- ROE uses profit attributable to owners divided by average parent equity.
+- ROA uses consolidated profit for the period divided by average consolidated total assets.
+- ROCE uses EBIT (or operating profit if EBIT is unavailable) divided by average capital employed. Capital employed is total assets less current liabilities for each of the two annual periods.
+- EPS growth compares the same EPS field (diluted, EPS, basic, or earnings per share) across the two annual periods.
+- The dashboard and PDF show the financial period and market-price date. The PDF includes key calculation inputs and methodology notes.
+
+These formulas were tested with synthetic financial statement data. Live BharatStock field mapping and company-specific reported values still require verification against the provider response.

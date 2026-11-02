@@ -16,7 +16,7 @@ import requests
 BASE_URL = "https://bharatstockapi.com"
 CACHE_TTL_SECONDS = 24 * 60 * 60
 STATEMENT_AMOUNT_DIVISOR = 10_000_000
-DATA_SCHEMA_VERSION = 7
+DATA_SCHEMA_VERSION = 8
 DAILY_APP_BUDGET = 55
 CACHE_DIR = Path(".smartstock_cache")
 DB_PATH = CACHE_DIR / "bharatstock_cache.sqlite"
@@ -186,7 +186,10 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
     previous = rows[1] if len(rows) > 1 else {}
     revenue = _first_non_none(_num(latest, "revenue"), _num(latest, "total_income"))
     prior_revenue = _first_non_none(_num(previous, "revenue"), _num(previous, "total_income"))
-    net_profit = _first_non_none(_num(latest, "net_profit_attributable_to_owners"), _num(latest, "net_profit"))
+    # Keep consolidated PAT and parent-attributable PAT separate: use the
+    # former for whole-group margins/ROA, and the latter for parent-shareholder ROE.
+    net_profit_total = _num(latest, "net_profit", "profit_after_tax", "profit_for_the_period")
+    net_profit_owners = _num(latest, "net_profit_attributable_to_owners", "profit_attributable_to_owners")
     operating_profit = _first_non_none(_num(latest, "ebit"), _num(latest, "operating_profit"))
     ebitda = _num(latest, "ebitda")
     pbt = _num(latest, "profit_before_tax")
@@ -229,11 +232,22 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
 
     avg_assets = (total_assets + prior_assets) / 2 if total_assets is not None and prior_assets is not None else None
     avg_equity = (equity + prior_equity) / 2 if equity is not None and prior_equity is not None else None
-    capital_employed = None
-    if total_assets is not None and current_liabilities is not None:
-        capital_employed = total_assets - current_liabilities
-    elif equity is not None and debt is not None:
-        capital_employed = equity + debt
+
+    # Capital employed = total assets - current liabilities for each year.
+    # ROCE uses the average of opening and closing capital employed, not closing only.
+    prior_current_liabilities = _num(previous, "current_liabilities")
+    current_capital_employed = (
+        total_assets - current_liabilities
+        if total_assets is not None and current_liabilities is not None else None
+    )
+    prior_capital_employed = (
+        prior_assets - prior_current_liabilities
+        if prior_assets is not None and prior_current_liabilities is not None else None
+    )
+    avg_capital_employed = (
+        (current_capital_employed + prior_capital_employed) / 2
+        if current_capital_employed is not None and prior_capital_employed is not None else None
+    )
 
     paid_up_capital = _first_non_none(*[_num(latest, k) for k in (
         "paid_up_equity_capital", "paid_up_share_capital", "paid_up_capital",
@@ -242,10 +256,14 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
     face_value = _first_non_none(*[_num(latest, k) for k in (
         "face_value_per_share", "face_value", "equity_share_face_value"
     )])
+    # This is an estimate from issued/paid-up equity share capital, never authorised capital.
     shares_crore = paid_up_capital / face_value if paid_up_capital is not None and face_value not in (None, 0) else None
     # ₹ crore / crore shares = ₹ per share.
     book_value_per_share = _safe_ratio(equity, shares_crore) if shares_crore else None
-    eps = _first_non_none(_num(latest, "diluted_eps"), _num(latest, "eps"), _num(latest, "basic_eps"), _num(latest, "earnings_per_share"))
+    eps_key_candidates = ("diluted_eps", "eps", "basic_eps", "earnings_per_share")
+    eps_key = next((k for k in eps_key_candidates if _num(latest, k) is not None), None)
+    eps = _num(latest, eps_key) if eps_key else None
+    prior_eps = _num(previous, eps_key) if eps_key else None
     price = float(market_price) if market_price is not None else None
 
     ratios = {}
@@ -255,29 +273,30 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
 
     # Entire ratio set below is calculated from statements + TejHQ market close.
     put("Current Price", price)
-    put("Market Cap", price * shares_crore if price is not None and shares_crore is not None else None)  # ₹ crore
+    put("Market Cap (Estimated)", price * shares_crore if price is not None and shares_crore is not None else None)  # ₹ crore
     put("Face Value", face_value)
     put("EPS", eps)
     put("Book Value per Share", book_value_per_share)
-    put("P/E", _safe_ratio(price, eps))
+    put("P/E (Annual)", _safe_ratio(price, eps))
+    # Quarterly statements are not requested by this integration; do not invent TTM EPS.
     put("P/B", _safe_ratio(price, book_value_per_share))
     put("Price-to-Sales", _safe_ratio(price * shares_crore, revenue) if price is not None and shares_crore and revenue else None)
     put("Earnings Yield", _safe_ratio(eps, price, 100))
     put("Revenue Growth", _safe_ratio(revenue - prior_revenue if revenue is not None and prior_revenue is not None else None, prior_revenue, 100))
-    put("EPS Growth", _safe_ratio(eps - _num(previous, "diluted_eps", "eps") if eps is not None and _num(previous, "diluted_eps", "eps") is not None else None, _num(previous, "diluted_eps", "eps"), 100))
-    put("Net Profit Margin", _safe_ratio(net_profit, revenue, 100))
+    put("EPS Growth", _safe_ratio(eps - prior_eps if eps is not None and prior_eps is not None else None, prior_eps, 100))
+    put("Net Profit Margin", _safe_ratio(net_profit_total, revenue, 100))
     put("Operating Margin", _safe_ratio(operating_profit, revenue, 100))
     put("EBITDA Margin", _safe_ratio(ebitda, revenue, 100))
     put("PBT Margin", _safe_ratio(pbt, revenue, 100))
-    put("ROE", _safe_ratio(net_profit, avg_equity, 100))
-    put("ROA", _safe_ratio(net_profit, avg_assets, 100))
-    put("ROCE", _safe_ratio(operating_profit, capital_employed, 100))
+    put("ROE", _safe_ratio(net_profit_owners, avg_equity, 100))
+    put("ROA", _safe_ratio(net_profit_total, avg_assets, 100))
+    put("ROCE", _safe_ratio(operating_profit, avg_capital_employed, 100))
     put("Debt-to-Equity", _safe_ratio(debt, equity))
     put("Current Ratio", _safe_ratio(current_assets, current_liabilities))
     put("Interest Coverage", _safe_ratio(operating_profit, finance_cost))
     put("Asset Turnover", _safe_ratio(revenue, avg_assets))
     operating_cash_flow = _num(latest, "cash_flow_operating")
-    put("Operating Cash Flow / Net Profit", _safe_ratio(operating_cash_flow, net_profit))
+    put("Operating Cash Flow / Net Profit", _safe_ratio(operating_cash_flow, net_profit_total))
     put("Cash Flow Margin", _safe_ratio(operating_cash_flow, revenue, 100))
 
     dividend_per_share = _first_non_none(
@@ -314,13 +333,13 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
                 **{k: row.get(k) for k in allowed if row.get(k) is not None}}
 
     calculation_notes = {
-        "P/E": "Latest TejHQ closing price ÷ latest annual EPS. Annual EPS basis; not TTM unless the statement is TTM.",
+        "P/E (Annual)": "Latest TejHQ closing price ÷ latest full-year EPS. This is annual P/E, not TTM P/E. Quarterly statements are not currently requested, so TTM P/E is intentionally not shown.",
         "P/B": "Latest TejHQ closing price ÷ calculated book value per share.",
         "Book Value per Share": "Consolidated equity attributable to owners of the parent ÷ estimated ordinary shares outstanding. Shares are estimated from paid-up equity share capital ÷ face value. Non-controlling interests are excluded; if parent equity cannot be isolated, BVPS and P/B are N/A.",
-        "Market Cap": "Latest TejHQ closing price × estimated shares outstanding; ₹ crore.",
-        "ROE": "Latest annual net profit attributable to owners ÷ average opening/closing equity. Requires two annual balance sheets.",
-        "ROA": "Latest annual net profit ÷ average opening/closing total assets. Requires two annual balance sheets.",
-        "ROCE": "EBIT (or operating profit if EBIT absent) ÷ (total assets − current liabilities). Uses closing capital employed.",
+        "Market Cap (Estimated)": "Latest TejHQ closing price × estimated shares outstanding. Shares are estimated only from paid-up/issued equity share capital ÷ face value; authorised capital is never used. Treat as estimated until reconciled to the latest share count.",
+        "ROE": "Annual profit attributable to owners of the parent ÷ average opening and closing parent-attributable equity. Requires both annual balance sheets and owner-attributable profit.",
+        "ROA": "Consolidated profit for the period ÷ average opening and closing consolidated total assets. Requires two annual balance sheets.",
+        "ROCE": "EBIT (or operating profit if EBIT is absent) ÷ average opening and closing capital employed, where capital employed = total assets − current liabilities. Requires two annual balance sheets.",
         "Dividend Yield": "Latest annual dividend per share found in statement ÷ latest TejHQ closing price. N/A if dividend/share is not supplied.",
         "Interest Coverage": "EBIT (or operating profit if EBIT absent) ÷ interest expense (finance costs used only if explicit interest fields absent).",
     }
@@ -334,6 +353,7 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
         "balance_sheet": [pick(row, balance_fields) for row in rows[:5]],
         "cash_flow": [pick(row, cash_fields) for row in rows[:5]],
         "financial_period": latest.get("fiscal_year") or latest.get("period_end_date"),
+        "previous_financial_period": previous.get("fiscal_year") or previous.get("period_end_date"),
         "market_price_date": market_price_date,
         "consolidation_type": latest.get("consolidation_type"),
         "financial_rows": min(len(rows), 5), "available_financial_rows": len(rows),
@@ -342,14 +362,19 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
         "ratio_source": "All ratios calculated locally from BharatStock annual statements and TejHQ closing price; BharatStock ratios endpoint is not used.",
         "ratio_calculation_notes": calculation_notes,
         "ratio_input_values": {
-            "revenue": revenue, "prior_revenue": prior_revenue, "net_profit": net_profit,
+            "revenue": revenue, "prior_revenue": prior_revenue,
+            "net_profit_total": net_profit_total, "net_profit_attributable_to_owners": net_profit_owners,
             "operating_profit_or_ebit": operating_profit, "ebitda": ebitda,
             "total_assets": total_assets, "prior_total_assets": prior_assets,
+            "current_capital_employed": current_capital_employed,
+            "prior_capital_employed": prior_capital_employed,
+            "average_capital_employed": avg_capital_employed,
             "equity": equity, "prior_equity": prior_equity, "total_equity_latest": total_equity_latest,
             "non_controlling_interests_latest": nci_latest, "equity_basis": "parent owners equity" if owner_equity is not None else "unavailable",
             "debt": debt,
             "paid_up_equity_capital": paid_up_capital, "face_value": face_value,
-            "estimated_shares_crore": shares_crore, "eps": eps,
+            "estimated_shares_crore": shares_crore, "eps": eps, "prior_eps": prior_eps,
+            "eps_basis_field": eps_key,
             "dividend_per_share": dividend_per_share, "market_price": price,
         },
     }
