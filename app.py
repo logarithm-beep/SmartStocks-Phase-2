@@ -4,7 +4,7 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-
+from supabase import create_client
 from data.fetch_data import fetch_stock_data
 from data.stock_master import load_stock_master, refresh_stock_master
 from indicators.moving_average import calculate_ma
@@ -23,6 +23,19 @@ from fundamentals.helpers import (
 from ui.charts import plot_price_chart
 from utils.formatters import format_large_number
 
+
+@st.cache_resource
+def get_supabase_client():
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_SECRET_KEY"]
+    return create_client(url, key)
+
+try:
+    supabase = get_supabase_client()
+    st.sidebar.success("Supabase connected!")
+except Exception as e:
+    supabase = None
+    st.sidebar.error(f"Supabase connection failed: {e}")
 
 st.set_page_config(page_title="SmartStocks AI", layout="wide")
 st.title("SmartStocks AI")
