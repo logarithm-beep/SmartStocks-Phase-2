@@ -16,7 +16,7 @@ import requests
 BASE_URL = "https://bharatstockapi.com"
 CACHE_TTL_SECONDS = 24 * 60 * 60
 STATEMENT_AMOUNT_DIVISOR = 10_000_000
-DATA_SCHEMA_VERSION = 8
+DATA_SCHEMA_VERSION = 9
 DAILY_APP_BUDGET = 55
 CACHE_DIR = Path(".smartstock_cache")
 DB_PATH = CACHE_DIR / "bharatstock_cache.sqlite"
@@ -74,7 +74,7 @@ def _request_financials(ticker, api_key):
         response = requests.get(
             f"{BASE_URL}/v1/stocks/{ticker}/financials",
             headers={"X-API-Key": api_key, "Accept": "application/json"},
-            params={"period_type": "annual", "page": 1, "page_size": 2}, timeout=25,
+            params={"period_type": "annual", "page": 1, "page_size": 5}, timeout=25,
         )
     except requests.RequestException as exc:
         raise RuntimeError(f"BharatStock network error: {type(exc).__name__}.") from None
@@ -91,18 +91,37 @@ def _request_financials(ticker, api_key):
 
 
 def _rows(payload):
+    """Extract annual statement rows from documented and nested API envelopes."""
     if isinstance(payload, list):
         return payload
     if not isinstance(payload, dict):
         return []
-    data = payload.get("data", payload)
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for name in ("data", "items", "results", "financials"):
-            if isinstance(data.get(name), list):
-                return data[name]
-        return [data] if data else []
+
+    # Standard BharatStock list envelope: {"data": [...], "pagination": {...}}.
+    for name in ("data", "items", "results", "financials", "annual_financials", "records"):
+        value = payload.get(name)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            nested = _rows(value)
+            if nested:
+                return nested
+
+    # Some wrappers nest statements by statement type. Prefer a list that
+    # contains dated records, rather than accidentally treating the envelope
+    # itself as a financial row.
+    for value in payload.values():
+        if isinstance(value, dict):
+            nested = _rows(value)
+            if nested:
+                return nested
+
+    row_markers = {
+        "fiscalyear", "periodenddate", "revenue", "totalincome", "netprofit",
+        "eps", "profitbeforetax", "totalassets", "facevaluepershare",
+    }
+    if row_markers.intersection(_normal_key(k) for k in payload):
+        return [payload]
     return []
 
 
@@ -121,6 +140,8 @@ def _num(row, *keys):
             value = normalized.get(_normal_key(key))
         if value is None or value == "":
             continue
+        if isinstance(value, dict):
+            value = _first_non_none(value.get("value"), value.get("amount"), value.get("reported_value"))
         try:
             cleaned = str(value).replace(",", "").replace("₹", "").replace("%", "").strip()
             return float(cleaned)
@@ -151,7 +172,7 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
         "tax_expense", "net_profit", "net_profit_attributable_to_owners", "eps", "diluted_eps", "other_income",
         "other_expenses", "exceptional_items", "ebit", "interest_expense", "interest_on_borrowings", "interest_cost",
         "dividend_per_share", "dividend_per_share_amount", "annual_dividend_per_share", "face_value_per_share", "face_value",
-        "basic_eps", "earnings_per_share", "paid_up_capital", "share_capital", "equity_share_capital",
+        "basic_eps", "earnings_per_share", "eps_basic", "face_value_per_share", "paid_up_capital", "share_capital", "equity_share_capital",
     }
     balance_fields = {
         "total_assets", "total_equity", "total_liabilities", "current_assets", "current_liabilities",
@@ -166,6 +187,7 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
         "equity_attributable_to_parent", "parent_shareholders_equity", "owners_equity",
         "non_controlling_interests", "non_controlling_interest", "minority_interest", "minority_interests",
         "equity_attributable_to_non_controlling_interests", "total_shareholders_equity", "total_stockholders_equity",
+        "minority_interest_balance", "other_equity",
     }
     cash_fields = {"cash_flow_operating", "cash_flow_investing", "cash_flow_financing", "net_change_in_cash", "capex"}
     meta_fields = ("fiscal_year", "period_end_date", "period_type", "consolidation_type", "statement_format")
@@ -188,11 +210,11 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
     prior_revenue = _first_non_none(_num(previous, "revenue"), _num(previous, "total_income"))
     # Keep consolidated PAT and parent-attributable PAT separate: use the
     # former for whole-group margins/ROA, and the latter for parent-shareholder ROE.
-    net_profit_total = _num(latest, "net_profit", "profit_after_tax", "profit_for_the_period")
+    net_profit_total = _num(latest, "net_profit", "profit_after_tax", "profit_for_the_period", "profit_after_tax_attributable_to_owners")
     net_profit_owners = _num(latest, "net_profit_attributable_to_owners", "profit_attributable_to_owners")
     operating_profit = _first_non_none(_num(latest, "ebit"), _num(latest, "operating_profit"))
     ebitda = _num(latest, "ebitda")
-    pbt = _num(latest, "profit_before_tax")
+    pbt = _num(latest, "profit_before_tax", "profit_before_tax_and_exceptional_items")
     total_assets = _num(latest, "total_assets")
     prior_assets = _num(previous, "total_assets")
     # Consolidated common-equity basis: use equity attributable to owners of
@@ -260,7 +282,7 @@ def _calculate(ticker, payload, market_price=None, price_history=None):
     shares_crore = paid_up_capital / face_value if paid_up_capital is not None and face_value not in (None, 0) else None
     # ₹ crore / crore shares = ₹ per share.
     book_value_per_share = _safe_ratio(equity, shares_crore) if shares_crore else None
-    eps_key_candidates = ("diluted_eps", "eps", "basic_eps", "earnings_per_share")
+    eps_key_candidates = ("diluted_eps", "eps", "basic_eps", "eps_basic", "earnings_per_share")
     eps_key = next((k for k in eps_key_candidates if _num(latest, k) is not None), None)
     eps = _num(latest, eps_key) if eps_key else None
     prior_eps = _num(previous, eps_key) if eps_key else None
@@ -387,44 +409,56 @@ def get_fundamental_data(ticker, api_key, force_refresh=False, market_price=None
     if not api_key:
         raise ValueError("BHARATSTOCK_API_KEY is not configured.")
     key = _key(ticker, api_key)
-    with _connect() as conn:
-        row = conn.execute("SELECT payload, fetched_at FROM fundamentals WHERE cache_key=?", (key,)).fetchone()
 
-    payload = None
+    cached_payload = None
     cache_status = "MISS"
-    if row and not force_refresh and time.time() - row[1] <= CACHE_TTL_SECONDS:
+    with _connect() as conn:
+        cached = conn.execute("SELECT payload, fetched_at FROM fundamentals WHERE cache_key=?", (key,)).fetchone()
+
+    if cached and not force_refresh and time.time() - cached[1] <= CACHE_TTL_SECONDS:
         try:
-            payload = json.loads(row[0])
+            cached_payload = json.loads(cached[0])
             cache_status = "HIT"
         except json.JSONDecodeError:
-            payload = None
+            cached_payload = None
+
+    payload = cached_payload
     if payload is None:
+        payload = _request_financials(ticker, api_key)
+        cache_status = "MISS"
+
+    # A previously cached empty/unsupported response can otherwise make a
+    # peer show N/A forever. If a cache hit cannot be parsed into useful ratios,
+    # bypass it once and request fresh annual statements.
+    try:
+        result = _calculate(ticker, payload, market_price=market_price, price_history=price_history)
+        if not result.get("top_ratios") and cache_status == "HIT":
+            raise RuntimeError("Cached annual statement response contained no usable ratio inputs.")
+    except Exception as first_error:
+        if cache_status != "HIT":
+            raise
+        payload = _request_financials(ticker, api_key)
+        cache_status = "REFRESHED_AFTER_BAD_CACHE"
         try:
-            payload = _request_financials(ticker, api_key)
-        except (BharatStockRateLimitError, BharatStockDailyBudgetError, RuntimeError):
-            if row:
-                try:
-                    payload = json.loads(row[0])
-                    cache_status = "STALE_FALLBACK"
-                except json.JSONDecodeError:
-                    raise
-            else:
-                raise
-        else:
-            with _connect() as conn:
-                conn.execute(
-                    """INSERT INTO fundamentals VALUES (?, ?, ?, ?)
-                    ON CONFLICT(cache_key) DO UPDATE SET ticker=excluded.ticker,
-                    payload=excluded.payload, fetched_at=excluded.fetched_at""",
-                    (key, ticker, json.dumps(payload), time.time()),
-                )
-                conn.commit()
-    result = _calculate(ticker, payload, market_price=market_price, price_history=price_history)
-    # Keep the raw annual statement response in session state so market-sensitive
-    # ratios can be recalculated on every price refresh without another API call.
+            result = _calculate(ticker, payload, market_price=market_price, price_history=price_history)
+        except Exception as fresh_error:
+            raise RuntimeError(
+                f"Fresh BharatStock annual data for {ticker} could not be processed: {fresh_error}"
+            ) from None
+
+    # Only cache a response after it has been parsed and calculated successfully.
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO fundamentals VALUES (?, ?, ?, ?)
+            ON CONFLICT(cache_key) DO UPDATE SET ticker=excluded.ticker,
+            payload=excluded.payload, fetched_at=excluded.fetched_at""",
+            (key, ticker, json.dumps(payload), time.time()),
+        )
+        conn.commit()
+
     result["_raw_statement_payload"] = payload
     result["cache_status"] = cache_status
-    result["api_calls_for_fetch"] = 1 if cache_status == "MISS" else 0
+    result["api_calls_for_fetch"] = 1 if cache_status in ("MISS", "REFRESHED_AFTER_BAD_CACHE") else 0
     return result
 
 

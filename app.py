@@ -519,7 +519,15 @@ if analysis:
                             for column in ratio_columns:
                                 row[column] = ratios.get(column)
                             if not ratios:
-                                peer_errors.append(f"{peer}: BharatStock returned financial statements but no calculated ratios.")
+                                row_count = peer_data.get("available_financial_rows", 0)
+                                periods = [
+                                    item.get("fiscal_year") or item.get("period_end_date")
+                                    for item in (peer_data.get("profit_and_loss") or [])[:2]
+                                ]
+                                peer_errors.append(
+                                    f"{peer}: BharatStock returned {row_count} annual row(s), but none of the requested ratios could be calculated. "
+                                    f"Periods: {periods or 'not identified'}. Check the provider's filed fields and statement coverage."
+                                )
                         except (BharatStockDailyBudgetError, BharatStockRateLimitError) as exc:
                             peer_errors.append(f"{peer}: {exc}")
                             for column in ratio_columns:
