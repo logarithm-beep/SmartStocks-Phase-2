@@ -292,11 +292,16 @@ if analysis:
                 cache_label = "Fresh local cache available" if cache_info["fresh"] else (
                     "Older local cache available" if cache_info["cached"] else "No local cache yet"
                 )
+                # Backward-compatible defaults prevent a dashboard crash if an older
+                # cache-info implementation is deployed alongside this app.py.
+                attempts_today = cache_info.get("attempts_today", cache_info.get("calls_today", 0))
+                successful_today = cache_info.get("successful_calls_today", 0)
+                failed_today = cache_info.get("failed_attempts_today", 0)
                 st.caption(
                     f"BharatStock cache: {cache_label} · API attempts on this app instance: "
-                    f"{cache_info['attempts_today']} today · "
-                    f"Successful: {cache_info['successful_calls_today']} · "
-                    f"Failed: {cache_info['failed_attempts_today']}"
+                    f"{attempts_today} today · "
+                    f"Successful: {successful_today} · "
+                    f"Failed: {failed_today}"
                 )
                 st.caption(
                     "The daily safety limit counts all outbound attempts, including failed requests, because "
