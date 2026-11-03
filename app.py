@@ -24,6 +24,9 @@ from fundamentals.helpers import (
 from ui.charts import plot_price_chart
 from utils.formatters import format_large_number
 
+# Configure the page before any other Streamlit command.
+st.set_page_config(page_title="SmartStocks AI", layout="wide")
+
 
 @st.cache_resource
 def get_supabase_client():
@@ -38,7 +41,6 @@ except Exception as e:
     supabase = None
     st.sidebar.error(f"Supabase connection failed: {e}")
 
-st.set_page_config(page_title="SmartStocks AI", layout="wide")
 st.title("SmartStocks AI")
 st.sidebar.title("📊 SmartStocks AI")
 st.sidebar.subheader("Chart indicators")
