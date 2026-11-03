@@ -169,9 +169,14 @@ def build_annual_analysis_tables(pnl_rows, bs_rows, cf_rows, price_history=None)
         year_end, avg_price = _year_prices(p or b or c, price_history)
         revenue = _pick(p, "revenue", "total_income")
         prior_revenue = _pick(pnl[i+1], "revenue", "total_income") if i+1 < len(pnl) else None
-        gross_profit = _pick(p, "gross_profit")
-        if gross_profit is None:
-            gross_profit = (revenue - _pick(p, "cost_of_materials_consumed", "cost_of_goods_sold")) if revenue is not None and _pick(p, "cost_of_materials_consumed", "cost_of_goods_sold") is not None else None
+        # Use the requested definition consistently: (Revenue - COGS) / Revenue.
+        # Do not substitute a provider's differently-defined gross_profit field.
+        cogs = _pick(
+            p,
+            "cost_of_goods_sold", "cost_of_revenue", "cost_of_sales",
+            "cost_of_materials_consumed", "materials_consumed",
+        )
+        gross_profit = revenue - cogs if revenue is not None and cogs is not None else None
         operating_profit = _pick(p, "ebit", "operating_profit")
         net_profit = _pick(p, "net_profit", "profit_after_tax", "profit_for_the_period")
         prior_net = _pick(pnl[i+1], "net_profit", "profit_after_tax", "profit_for_the_period") if i+1 < len(pnl) else None
@@ -210,7 +215,9 @@ def build_annual_analysis_tables(pnl_rows, bs_rows, cf_rows, price_history=None)
         ce = assets-current_liabilities if assets is not None and current_liabilities is not None else None
         prev_ce = prev_assets-prev_cl if prev_assets is not None and prev_cl is not None else None
         net_owner_profit = _pick(p, "net_profit_attributable_to_owners", "profit_attributable_to_owners") or net_profit
-        roce_base = ((ce+prev_ce)/2) if ce is not None and prev_ce is not None else None
+        # Requested ROCE definition: EBIT / current-year capital employed.
+        # Capital employed = total assets - current liabilities.
+        roce_base = ce
         bvps = _ratio(equity, shares_cr)
         ev = market_cap + debt - cash if market_cap is not None and debt is not None and cash is not None else None
         bs_table.append({
@@ -245,6 +252,15 @@ def build_annual_analysis_tables(pnl_rows, bs_rows, cf_rows, price_history=None)
     # missing financial data with zero, which would imply a real reported value.
     def display_na(rows):
         frame = pd.DataFrame(rows)
+        # Keep numeric values numeric for sorting/export, but cap precision at
+        # two decimal places across all annual-analysis tables.
+        for column in frame.columns:
+            if column != "Year":
+                frame[column] = frame[column].map(
+                    lambda value: round(float(value), 2)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)
+                    else value
+                )
         return frame.astype(object).where(pd.notna(frame), "N/A")
 
     return display_na(pnl_table), display_na(bs_table), display_na(cf_table)
@@ -257,7 +273,7 @@ def annual_table_column_config(table_kind):
         "Year": "Financial year reported by BharatStock.",
         "Fiscal Year-End Share Price (₹)": "Last available TejHQ closing price on or immediately before the fiscal year-end. Blank if history is unavailable.",
         "Average Annual Share Price (₹)": "Average daily TejHQ closing price during the fiscal year. Requires sufficient historical price coverage.",
-        "Gross Profit Margin (%)": "Gross profit divided by revenue × 100. Gross profit is sourced directly or estimated as revenue less cost of goods sold/materials when available.",
+        "Gross Profit Margin (%)": "(Revenue − cost of goods sold) ÷ Revenue × 100. Requires revenue and a reported cost-of-goods-sold/cost-of-sales field.",
         "Operating Margin (EBIT Margin) (%)": "EBIT divided by revenue × 100.",
         "Net Profit Margin (%)": "Net profit divided by revenue × 100.",
         "EBITDA Margin (%)": "EBITDA divided by revenue × 100.",
@@ -273,7 +289,7 @@ def annual_table_column_config(table_kind):
         "Financial Leverage Ratio (x)": "Total assets divided by shareholders' equity.",
         "Return on Equity (ROE) (%)": "Annual net income attributable to owners divided by average opening and closing equity × 100.",
         "Return on Assets (ROA) (%)": "Annual net income divided by average opening and closing total assets × 100.",
-        "Return on Capital Employed (ROCE) (%)": "EBIT divided by average capital employed × 100; capital employed = total assets − current liabilities.",
+        "Return on Capital Employed (ROCE) (%)": "EBIT ÷ capital employed × 100; capital employed = total assets − current liabilities for the same financial year.",
         "Price-to-Book (P/B) (x)": "Fiscal year-end share price divided by book value per share.",
         "Enterprise Value (₹ Cr.)": "Market capitalisation + interest-bearing debt − cash and cash equivalents.",
         "Market Cap (₹ Cr.)": "Fiscal year-end share price × estimated shares outstanding.",
