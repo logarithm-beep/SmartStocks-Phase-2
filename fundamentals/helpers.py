@@ -122,10 +122,18 @@ def _year_prices(row, price_history):
     if price_history is None or getattr(price_history, "empty", True) or "Close" not in price_history:
         return None, None
     end_value = row.get("period_end_date")
-    if not end_value:
-        return None, None
     try:
-        end = pd.Timestamp(end_value)
+        if end_value:
+            end = pd.Timestamp(end_value)
+        else:
+            # BharatStock may provide only a fiscal-year label such as 2024-25.
+            # Indian listed-company financial years normally end on 31 March.
+            fiscal_year = str(row.get("fiscal_year") or "").strip()
+            match = re.match(r"^(\d{4})\s*[-/–]\s*(\d{2}|\d{4})$", fiscal_year)
+            if not match:
+                return None, None
+            end_year = int(match.group(1)) + 1
+            end = pd.Timestamp(year=end_year, month=3, day=31)
         start = end - pd.DateOffset(years=1) + pd.Timedelta(days=1)
         close = price_history["Close"].dropna().copy()
         close.index = pd.to_datetime(close.index)
@@ -233,7 +241,13 @@ def build_annual_analysis_tables(pnl_rows, bs_rows, cf_rows, price_history=None)
             "EV-to-Free Cash Flow (x)": _ratio(ev_cf, free_cash_flow),
         })
 
-    return pd.DataFrame(pnl_table), pd.DataFrame(bs_table), pd.DataFrame(cf_table)
+    # Keep unavailable values explicit and consistent in the UI. Never replace
+    # missing financial data with zero, which would imply a real reported value.
+    def display_na(rows):
+        frame = pd.DataFrame(rows)
+        return frame.astype(object).where(pd.notna(frame), "N/A")
+
+    return display_na(pnl_table), display_na(bs_table), display_na(cf_table)
 
 
 def annual_table_column_config(table_kind):

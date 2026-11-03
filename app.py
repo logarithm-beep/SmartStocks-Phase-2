@@ -314,10 +314,23 @@ if analysis:
                     st.error("BHARATSTOCK_API_KEY not found in Streamlit Secrets or local .env.")
                 else:
                     try:
-                        with st.spinner(f"Loading annual statements for {ticker_loaded} and calculating ratios..."):
+                        with st.spinner(f"Loading annual statements and historical prices for {ticker_loaded}..."):
+                            # The chart may be set to 6mo/1y. Annual tables need at least
+                            # two full fiscal years of daily closes, so fetch 5y separately.
+                            history_key = f"fundamental_price_history_{ticker_loaded}"
+                            annual_price_history = st.session_state.get(history_key)
+                            if annual_price_history is None or refresh_clicked:
+                                try:
+                                    annual_price_history, _ = fetch_stock_data(ticker_loaded, period="5y")
+                                    annual_price_history = annual_price_history.dropna(subset=["Close"]).sort_index()
+                                    st.session_state[history_key] = annual_price_history
+                                except Exception:
+                                    # Financial statements can still load; price-based
+                                    # historical fields will show N/A if price history fails.
+                                    annual_price_history = df
                             data = get_fundamental_data(
                                 ticker_loaded, api_key, force_refresh=refresh_clicked,
-                                market_price=current_price, price_history=df,
+                                market_price=current_price, price_history=annual_price_history,
                             )
                         st.session_state[f"fundamentals_{ticker_loaded}"] = data
                         st.success(f"Statements loaded for {ticker_loaded} · {data.get('api_calls_for_fetch', 0)} API call(s) used · cache {data.get('cache_status', 'MISS')}")
@@ -330,11 +343,14 @@ if analysis:
 
             fdata = st.session_state.get(f"fundamentals_{ticker_loaded}")
             if fdata:
+                annual_price_history = st.session_state.get(
+                    f"fundamental_price_history_{ticker_loaded}", df
+                )
                 pnl_table, bs_table, cf_table = build_annual_analysis_tables(
                     fdata.get("profit_and_loss", []),
                     fdata.get("balance_sheet", []),
                     fdata.get("cash_flow", []),
-                    price_history=df,
+                    price_history=annual_price_history,
                 )
                 with st.expander("Profit & Loss — Annual history", expanded=True):
                     if not pnl_table.empty:
