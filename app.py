@@ -19,6 +19,7 @@ from fundamentals.ratio import (
 )
 from fundamentals.helpers import (
     performance_returns, risk_metrics, rows_to_frame, format_statement_frame, statement_excel_frame,
+    build_annual_analysis_tables, annual_table_column_config,
 )
 from ui.charts import plot_price_chart
 from utils.formatters import format_large_number
@@ -303,12 +304,6 @@ if analysis:
                     f"Successful: {successful_today} · "
                     f"Failed: {failed_today}"
                 )
-                st.caption(
-                    "The daily safety limit counts all outbound attempts, including failed requests, because "
-                    "the provider may still count them toward quota. Successful and failed attempts are shown "
-                    "separately. This is a local per-instance counter, not BharatStock's account-wide quota; "
-                    "check BharatStock's dashboard for authoritative usage."
-                )
             load_col, refresh_col = st.columns(2)
             load_clicked = load_col.button("Load Fundamental Data", key=f"load_fundamentals_{ticker_loaded}")
             refresh_clicked = refresh_col.button("↻ Refresh Statements", key=f"refresh_fundamentals_{ticker_loaded}", help="Bypass the 24-hour statement cache. Uses one BharatStock annual-financials request.")
@@ -333,28 +328,25 @@ if analysis:
 
             fdata = st.session_state.get(f"fundamentals_{ticker_loaded}")
             if fdata:
-                st.caption(
-                    f"Annual financial statements · {fdata.get('financial_rows', 0)} year(s) returned by BharatStock. "
-                    + fdata.get("financial_history_limit_note", "")
+                pnl_table, bs_table, cf_table = build_annual_analysis_tables(
+                    fdata.get("profit_and_loss", []),
+                    fdata.get("balance_sheet", []),
+                    fdata.get("cash_flow", []),
+                    price_history=df,
                 )
-                st.caption(f"Calculation source: {fdata.get('ratio_source', 'SmartStocks local calculations')} · Financial period: {fdata.get('financial_period') or 'Not supplied'} · TejHQ closing price date: {fdata.get('market_price_date') or 'Not supplied'}")
-                pnl = rows_to_frame(fdata.get("profit_and_loss", []))
-                bs = rows_to_frame(fdata.get("balance_sheet", []))
-                cf = rows_to_frame(fdata.get("cash_flow", []))
-                st.caption("BharatStock supplies annual financial statements only. SmartStocks calculates every displayed ratio locally; no BharatStock valuation/ratios endpoint is used. Statement amounts are ₹ crore; per-share values are ₹/share.")
                 with st.expander("Profit & Loss — Annual history", expanded=True):
-                    if not pnl.empty:
-                        st.dataframe(format_statement_frame(pnl), use_container_width=True, hide_index=True)
+                    if not pnl_table.empty:
+                        st.dataframe(pnl_table, column_config=annual_table_column_config("pnl"), use_container_width=True, hide_index=True)
                     else:
                         st.info("Profit & Loss history is unavailable for this company.")
                 with st.expander("Balance Sheet — Annual history"):
-                    if not bs.empty:
-                        st.dataframe(format_statement_frame(bs), use_container_width=True, hide_index=True)
+                    if not bs_table.empty:
+                        st.dataframe(bs_table, column_config=annual_table_column_config("balance_sheet"), use_container_width=True, hide_index=True)
                     else:
                         st.info("Balance Sheet history is unavailable for this company.")
                 with st.expander("Cash Flow — Annual history"):
-                    if not cf.empty:
-                        st.dataframe(format_statement_frame(cf), use_container_width=True, hide_index=True)
+                    if not cf_table.empty:
+                        st.dataframe(cf_table, column_config=annual_table_column_config("cash_flow"), use_container_width=True, hide_index=True)
                     else:
                         st.info("Cash Flow history is unavailable for this company.")
             else:
